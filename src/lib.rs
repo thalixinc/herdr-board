@@ -5,6 +5,13 @@
 //! (TUI + daemon + store) and its real behavior land in epic #8, gated on the
 //! herdr 0.9.0 plugin/tab/pane compatibility qualification (critic repair G1).
 
+pub mod digest;
+
+pub use digest::{
+    compute, verify, CanonicalRequest, Digest, DigestId, Field, FieldDiff, Identity, Mismatch,
+    Refusal, StoredFields, SCHEMA_VERSION,
+};
+
 /// The plugin identity, surfaced to the herdr pane metadata.
 pub const PLUGIN_NAME: &str = "herdr-board";
 

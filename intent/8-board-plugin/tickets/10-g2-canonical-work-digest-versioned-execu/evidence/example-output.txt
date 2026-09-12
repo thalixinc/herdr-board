@@ -1,0 +1,10 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.00s
+     Running `target/debug/examples/digest_conflict`
+persisted digest id: c5eb5fa6e8c9924b
+dispatch + acceptance: verified clean
+
+drifted re-dispatch:
+stored digest id:   c5eb5fa6e8c9924b
+presented digest id: 322ec87011b7537b
+  body: "build the board\nwith care" -> "build the board\nwith care (edited after persist)"
+REFUSED: factory will not run
