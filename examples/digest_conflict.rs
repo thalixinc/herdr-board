@@ -4,9 +4,11 @@
 //! shows the field-level conflict and `REFUSED` for the drifted re-dispatch.
 
 use herdr_board::digest::{compute, verify, CanonicalRequest, Identity, Refusal, StoredFields};
+use herdr_board::FactoryKind;
 
 fn main() {
     let request = CanonicalRequest {
+        factory_kind: FactoryKind::FactoryRequest,
         identity: Identity::new("ThalixInc", "herdr-board", 42),
         revision: "2026-09-12T00:00:00Z".into(),
         factory: "coordinator".into(),

@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use crate::digest::compute;
+use crate::digest::compute_with_version;
 use crate::outbox::{Outcome, Receipt, Store, StoreError};
 
 use super::{
@@ -38,10 +38,12 @@ pub fn reconfirm(
     receipt: &Receipt,
     transport: &impl HandoffTransport,
 ) -> Result<Receipt, ReceiverError> {
-    let request = reconstruct_request(store, receipt)?;
-    // The persisted record must still match the receipt's digest; otherwise the
-    // board refuses rather than re-dispatching a drifted request.
-    if compute(&request) != receipt.digest {
+    let stored_fields = reconstruct_request(store, receipt)?;
+    let request = stored_fields.to_request();
+    // The persisted record must still match the receipt's digest, under the
+    // record's own schema version; otherwise the board refuses rather than
+    // re-dispatching a drifted request.
+    if compute_with_version(&request, stored_fields.schema_version) != receipt.digest {
         return Err(ReceiverError::Store(StoreError::InvalidData(
             "persisted request does not match receipt digest".to_owned(),
         )));

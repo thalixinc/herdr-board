@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use herdr_board::digest::Digest;
 use herdr_board::outbox::{HandoffId, Outcome, ReceiptId, RequestRecord, Store, StoreError};
+use herdr_board::{FactoryKind, SCHEMA_VERSION};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -41,6 +42,8 @@ impl Drop for TestDir {
 
 fn request(tag: u8) -> RequestRecord {
     RequestRecord {
+        schema_version: SCHEMA_VERSION,
+        factory_kind: FactoryKind::FactoryRequest,
         digest: Digest([tag; 32]),
         identity: format!("owner/repo#{tag}"),
         revision: "r1".to_string(),

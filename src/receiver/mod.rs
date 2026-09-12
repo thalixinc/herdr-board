@@ -12,7 +12,7 @@ pub use reconcile::{reconfirm, replay, startup_sweep, status_query, STALENESS_TH
 
 use std::fmt;
 
-use crate::digest::{compute, verify, CanonicalRequest, Identity, Mismatch, StoredFields};
+use crate::digest::{compute, verify, Identity, Mismatch, StoredFields, SCHEMA_VERSION};
 use crate::outbox::{Outcome, Receipt, RequestRecord, Store, StoreError};
 
 /// The receiver boundary — a sealed marker type.
@@ -112,8 +112,7 @@ pub fn receive(
         .get_by_handoff_id(&handoff.handoff_id)
         .map_err(ReceiverError::Store)?
     {
-        let stored_request = reconstruct_request(store, &existing)?;
-        let stored_fields = StoredFields::from(&stored_request);
+        let stored_fields = reconstruct_request(store, &existing)?;
         if let Err(mismatch) = verify(&existing.digest, &stored_fields, request) {
             return Err(ReceiverError::Refusal(mismatch));
         }
@@ -133,6 +132,8 @@ pub fn receive(
 
     // 5. Acquire the active-attempt slot: persist + insert `pending`.
     let record = RequestRecord {
+        schema_version: SCHEMA_VERSION,
+        factory_kind: request.factory_kind,
         digest,
         identity: request.identity.canonical(),
         revision: request.revision.clone(),
@@ -192,18 +193,19 @@ pub fn receive(
     }
 }
 
-/// Reconstruct the [`CanonicalRequest`] a receipt was dispatched from, by
-/// reading the persisted request record (which carries the `body` receipts
-/// deliberately do not denormalize).
+/// Reconstruct the persisted [`StoredFields`] snapshot a receipt was dispatched
+/// from, by reading the request record (which carries `schema_version`,
+/// `factory_kind`, and the `body` receipts deliberately do not denormalize).
 pub(crate) fn reconstruct_request(
     store: &Store,
     receipt: &Receipt,
-) -> Result<CanonicalRequest, ReceiverError> {
+) -> Result<StoredFields, ReceiverError> {
     let record = store
         .get_request_by_id(&receipt.request_id)
         .map_err(ReceiverError::Store)?
         .ok_or_else(|| invalid("receipt references a missing request".to_owned()))?;
-    Ok(CanonicalRequest {
+    Ok(StoredFields {
+        schema_version: record.schema_version,
         identity: parse_identity(&record.identity).ok_or_else(|| {
             invalid(format!(
                 "cannot parse canonical identity {:?}",
@@ -214,6 +216,7 @@ pub(crate) fn reconstruct_request(
         factory: record.factory,
         actor: record.actor,
         body: record.body,
+        factory_kind: record.factory_kind,
     })
 }
 

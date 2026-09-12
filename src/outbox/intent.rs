@@ -9,6 +9,7 @@ use rusqlite::{params, Row};
 use uuid::Uuid;
 
 use super::{Store, StoreError};
+use crate::kind::FactoryKind;
 
 /// A UUID v4 create-intent identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -124,7 +125,7 @@ pub struct CreateIntent {
     /// JSON array of labels, verbatim.
     pub labels: String,
     pub assignee: Option<String>,
-    pub factory_kind: Option<String>,
+    pub factory_kind: FactoryKind,
     pub outcome: CreateOutcome,
     /// Set only on `created`.
     pub issue_number: Option<u64>,
@@ -140,14 +141,16 @@ pub struct CreateIntent {
 
 impl CreateIntent {
     /// Construct a fresh intent with a new `intent_id` and `marker`, in the
-    /// `pending` state. `assignee`/`factory_kind` default to `None` and may be
-    /// set on the returned struct before [`Store::insert_intent`].
+    /// `pending` state, carrying the card's `factory_kind`. `assignee` defaults
+    /// to `None` and may be set on the returned struct before
+    /// [`Store::insert_intent`].
     pub fn new(
         marker: Marker,
         repo: String,
         title: String,
         body: String,
         labels: String,
+        factory_kind: FactoryKind,
     ) -> CreateIntent {
         CreateIntent {
             intent_id: IntentId::new_v4(),
@@ -157,7 +160,7 @@ impl CreateIntent {
             body,
             labels,
             assignee: None,
-            factory_kind: None,
+            factory_kind,
             outcome: CreateOutcome::Pending,
             issue_number: None,
             reason: None,
@@ -187,7 +190,7 @@ impl Store {
                     intent.body,
                     intent.labels,
                     intent.assignee,
-                    intent.factory_kind,
+                    intent.factory_kind.as_str(),
                     now,
                 ],
             )
@@ -322,7 +325,7 @@ fn read_intent(row: &Row<'_>) -> Result<CreateIntent, StoreError> {
     let body: String = row.get(4)?;
     let labels: String = row.get(5)?;
     let assignee: Option<String> = row.get(6)?;
-    let factory_kind: Option<String> = row.get(7)?;
+    let factory_kind: String = row.get(7)?;
     let outcome: String = row.get(8)?;
     let issue_number: Option<i64> = row.get(9)?;
     let reason: Option<String> = row.get(10)?;
@@ -336,6 +339,9 @@ fn read_intent(row: &Row<'_>) -> Result<CreateIntent, StoreError> {
     let marker = marker
         .parse::<Marker>()
         .map_err(|e: uuid::Error| StoreError::InvalidData(e.to_string()))?;
+    let factory_kind = factory_kind
+        .parse::<FactoryKind>()
+        .map_err(|e: crate::kind::InvalidFactoryKind| StoreError::InvalidData(e.to_string()))?;
 
     Ok(CreateIntent {
         intent_id,

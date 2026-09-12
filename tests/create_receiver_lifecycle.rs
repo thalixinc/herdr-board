@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use herdr_board::{
     cancel, candidates, issue, link, marker_comment, Candidate, CreateError, CreateIntent,
-    CreateOutcome, CreateResult, GitHubClient, Issue, Marker, RepoIdentity, Store,
+    CreateOutcome, CreateResult, FactoryKind, GitHubClient, Issue, Marker, RepoIdentity, Store,
 };
 
 fn now_unix() -> i64 {
@@ -23,6 +23,7 @@ fn draft() -> CreateIntent {
         "Fix the board sync".to_string(),
         "The board should sync issues".to_string(),
         "[\"bug\"]".to_string(),
+        FactoryKind::Ordinary,
     )
 }
 

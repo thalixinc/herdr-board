@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 
 use herdr_board::{
-    issue, link, Candidate, CreateIntent, CreateOutcome, CreateResult, GitHubClient, Issue, Marker,
-    RepoIdentity, Store,
+    issue, link, Candidate, CreateIntent, CreateOutcome, CreateResult, FactoryKind, GitHubClient,
+    Issue, Marker, RepoIdentity, Store,
 };
 
 /// Always loses the response (uncertain), but knows issue 1234 exists for the
@@ -48,6 +48,7 @@ fn main() {
         "Fix the board sync".to_string(),
         "The board should sync issues".to_string(),
         "[\"bug\"]".to_string(),
+        FactoryKind::Ordinary,
     );
 
     // Draft → issue: the response is lost, so the create is uncertain.

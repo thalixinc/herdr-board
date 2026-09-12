@@ -4,13 +4,14 @@ use std::fmt;
 
 use super::hash::DigestId;
 
-/// The five canonical fields a work digest covers, in framing order.
+/// The six canonical fields a work digest covers, in framing order.
 ///
-/// The order here matches the digest's fixed framing order (identity,
-/// revision, factory, actor, body). It is informational for conflict display;
-/// it is not itself hashed.
+/// The order here matches the digest's fixed framing order (factory-kind,
+/// identity, revision, factory, actor, body). It is informational for conflict
+/// display; it is not itself hashed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Field {
+    FactoryKind,
     Identity,
     Revision,
     Factory,
@@ -22,6 +23,7 @@ impl Field {
     /// The field's stable, human-facing name.
     pub fn as_str(&self) -> &'static str {
         match self {
+            Field::FactoryKind => "factory-kind",
             Field::Identity => "identity",
             Field::Revision => "revision",
             Field::Factory => "factory",

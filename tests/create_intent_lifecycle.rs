@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use herdr_board::outbox::{CreateIntent, CreateOutcome, Marker, Store, StoreError};
+use herdr_board::FactoryKind;
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -45,6 +46,7 @@ fn intent(marker: Marker) -> CreateIntent {
         "Fix the board sync".to_string(),
         "Detailed body".to_string(),
         "[\"bug\"]".to_string(),
+        FactoryKind::Ordinary,
     )
 }
 

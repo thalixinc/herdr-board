@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
+mod draft;
 mod intent;
 mod receipt;
 
@@ -83,6 +84,35 @@ CREATE TABLE create_intents (
     issued_at    INTEGER,
     finalized_at INTEGER
 );
+";
+
+/// Migration v3 (G5): extend `requests` with the schema version and the
+/// factory-kind discriminator.
+///
+/// `schema_version DEFAULT 1` is the sentinel: pre-G5 rows read back as v1 and
+/// verify under the v1 layout via version-on-record. `factory_kind DEFAULT
+/// 'factory-request'` is honest — a `CanonicalRequest` only ever came from a
+/// factory-request card.
+const MIGRATION_V3: &str = "
+ALTER TABLE requests ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE requests ADD COLUMN factory_kind TEXT NOT NULL DEFAULT 'factory-request';
+";
+
+/// Migration v4 (G5): the board's draft store — one row per card draft, with
+/// its `factory_kind` written in the same INSERT (atomic, never a separate
+/// later update) — plus the G4 create-intent backfill so no intent row carries
+/// a NULL `factory_kind`.
+const MIGRATION_V4: &str = "
+CREATE TABLE drafts (
+    draft_id     TEXT PRIMARY KEY NOT NULL,
+    factory_kind TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    body         TEXT NOT NULL,
+    created_at   INTEGER NOT NULL,
+    published_at INTEGER
+);
+
+UPDATE create_intents SET factory_kind = 'ordinary' WHERE factory_kind IS NULL;
 ";
 
 /// A single connection to the outbox SQLite database, with the migration and
@@ -153,6 +183,20 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
         let tx = conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
         tx.execute_batch(MIGRATION_V2).map_err(StoreError::Sqlite)?;
         tx.pragma_update(None, "user_version", 2_i64)
+            .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+    }
+    if version < 3 {
+        let tx = conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        tx.execute_batch(MIGRATION_V3).map_err(StoreError::Sqlite)?;
+        tx.pragma_update(None, "user_version", 3_i64)
+            .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+    }
+    if version < 4 {
+        let tx = conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        tx.execute_batch(MIGRATION_V4).map_err(StoreError::Sqlite)?;
+        tx.pragma_update(None, "user_version", 4_i64)
             .map_err(StoreError::Sqlite)?;
         tx.commit().map_err(StoreError::Sqlite)?;
     }
