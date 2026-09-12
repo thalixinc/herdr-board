@@ -8,9 +8,11 @@
 use herdr_board::digest::{
     compute, verify, CanonicalRequest, Field, Identity, Refusal, StoredFields,
 };
+use herdr_board::FactoryKind;
 
 fn request() -> CanonicalRequest {
     CanonicalRequest {
+        factory_kind: FactoryKind::FactoryRequest,
         identity: Identity::new("ThalixInc", "herdr-board", 42),
         revision: "2026-09-12T00:00:00Z".into(),
         factory: "coordinator".into(),

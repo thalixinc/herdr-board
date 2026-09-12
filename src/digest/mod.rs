@@ -4,18 +4,18 @@
 //! # Contract
 //!
 //! The digest is computed over a **framed byte string** built from a
-//! [`CanonicalRequest`]'s five canonical fields. The same logical input always
+//! [`CanonicalRequest`]'s six canonical fields. The same logical input always
 //! produces the same [`Digest`]; any change to the field set, field order, or a
 //! field's canonicalization rule is a schema bump ([`SCHEMA_VERSION`]), because
 //! the version is hashed too.
 //!
-//! # Framing (version 1)
+//! # Framing (version 2)
 //!
-//! The digest input is the concatenation of six frames, in this fixed order:
+//! The digest input is the concatenation of seven frames, in this fixed order:
 //!
 //! ```text
-//! frame(version) || frame(identity) || frame(revision)
-//!     || frame(factory) || frame(actor) || frame(body)
+//! frame(version) || frame(factory_kind) || frame(identity)
+//!     || frame(revision) || frame(factory) || frame(actor) || frame(body)
 //! ```
 //!
 //! Each frame is `[length: u64 big-endian][raw bytes]`, where `length` is the
@@ -23,16 +23,23 @@
 //! length prefix is unambiguous even when a value contains newlines, Unicode,
 //! or bytes that happen to look like a length prefix.
 //!
-//! Canonical forms of the six frames:
+//! Canonical forms of the seven frames:
 //!
-//! | # | Frame    | Canonical form |
-//! |---|----------|----------------|
-//! | 0 | version  | [`SCHEMA_VERSION`] as decimal ASCII (no leading zeros) |
-//! | 1 | identity | `owner/repo#number` — `owner`/`repo` ASCII-lowercased, `number` decimal ASCII (no leading zeros) |
-//! | 2 | revision | opaque token, stored verbatim |
-//! | 3 | factory  | target factory identifier, verbatim |
-//! | 4 | actor    | trusted actor identity, verbatim |
-//! | 5 | body     | request body as persisted, verbatim UTF-8 bytes |
+//! | # | Frame        | Canonical form |
+//! |---|--------------|----------------|
+//! | 0 | version      | [`SCHEMA_VERSION`] as decimal ASCII (no leading zeros) |
+//! | 1 | factory_kind | `ordinary` or `factory-request` |
+//! | 2 | identity     | `owner/repo#number` — `owner`/`repo` ASCII-lowercased, `number` decimal ASCII (no leading zeros) |
+//! | 3 | revision     | opaque token, stored verbatim |
+//! | 4 | factory      | target factory identifier, verbatim |
+//! | 5 | actor        | trusted actor identity, verbatim |
+//! | 6 | body         | request body as persisted, verbatim UTF-8 bytes |
+//!
+//! Version 1 (legacy) omitted `factory_kind` and framed only the five
+//! identity/revision/factory/actor/body fields. [`compute_with_version`]
+//! selects the layout, and [`verify`] canonicalizes under the *record's*
+//! persisted version — so old records still verify under the v1 layout rather
+//! than failing spuriously.
 //!
 //! The digest is **SHA-256** over this framed byte string ([`compute`]). The
 //! full 32-byte [`Digest`] is the source of truth for comparison; its first
@@ -53,11 +60,11 @@
 
 /// The digest schema version. This is the first frame of the hashed input, so
 /// it is *inside* the digest: bumping it changes every digest even when the
-/// five field values are byte-identical.
+/// field values are byte-identical.
 ///
 /// Bump whenever the field set, field order, or any field's canonicalization
 /// rule changes.
-pub const SCHEMA_VERSION: u64 = 1;
+pub const SCHEMA_VERSION: u64 = 2;
 
 mod canonical;
 mod compare;
@@ -67,4 +74,4 @@ mod hash;
 pub use canonical::{CanonicalRequest, Identity};
 pub use compare::{verify, StoredFields};
 pub use conflict::{Field, FieldDiff, Mismatch, Refusal};
-pub use hash::{compute, Digest, DigestId};
+pub use hash::{compute, compute_with_version, Digest, DigestId};

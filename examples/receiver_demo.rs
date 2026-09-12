@@ -7,8 +7,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use herdr_board::{
-    prove_actor, receive, CanonicalRequest, ExternalResponse, Handoff, HandoffId, HandoffResult,
-    HandoffTransport, Identity, ReceiverError, Store,
+    prove_actor, receive, CanonicalRequest, ExternalResponse, FactoryKind, Handoff, HandoffId,
+    HandoffResult, HandoffTransport, Identity, ReceiverError, Store,
 };
 
 /// A transport that always accepts and counts calls.
@@ -43,6 +43,7 @@ fn main() {
 
     let actor = prove_actor();
     let request = CanonicalRequest {
+        factory_kind: FactoryKind::FactoryRequest,
         identity: Identity::new("ThalixInc", "herdr-board", 42),
         revision: "2026-09-12T00:00:00Z".into(),
         factory: "coordinator".into(),

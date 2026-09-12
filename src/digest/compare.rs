@@ -1,43 +1,73 @@
 //! Dispatch/acceptance comparison: [`StoredFields`] and [`verify`].
 
+use crate::kind::FactoryKind;
+
 use super::canonical::{CanonicalRequest, Identity};
 use super::conflict::{Field, FieldDiff, Mismatch};
-use super::hash::{compute, Digest};
+use super::hash::{compute_with_version, Digest};
+use super::SCHEMA_VERSION;
 
-/// The five canonical field values persisted atomically with a request's
-/// digest.
+/// The canonical field values — plus the schema version — persisted atomically
+/// with a request's digest.
 ///
 /// This snapshot is the board's record of *what was requested* at persist
 /// time. [`verify`] compares a dispatch- or acceptance-time
-/// [`CanonicalRequest`] against it. The values here are already canonical:
-/// `identity` re-canonicalizes via [`Identity::canonical`], while `revision`,
-/// `factory`, `actor`, and `body` are stored verbatim (never re-encoded,
-/// trimmed, or reordered).
+/// [`CanonicalRequest`] against it, canonicalizing under the **persisted**
+/// `schema_version` (version-on-record) rather than the compile-time constant,
+/// so records persisted under an older schema still verify under their own
+/// layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredFields {
+    pub schema_version: u64,
     pub identity: Identity,
     pub revision: String,
     pub factory: String,
     pub actor: String,
     pub body: String,
+    pub factory_kind: FactoryKind,
 }
 
 impl From<&CanonicalRequest> for StoredFields {
     fn from(request: &CanonicalRequest) -> Self {
         Self {
+            // A freshly-constructed request is canonicalized under the current
+            // schema; records read back from the store carry their own version.
+            schema_version: SCHEMA_VERSION,
             identity: request.identity.clone(),
             revision: request.revision.clone(),
             factory: request.factory.clone(),
             actor: request.actor.clone(),
             body: request.body.clone(),
+            factory_kind: request.factory_kind,
         }
     }
 }
 
 impl StoredFields {
+    /// Rebuild the [`CanonicalRequest`] this snapshot was taken from, dropping
+    /// the schema version. Used to re-dispatch on reconciliation; the caller
+    /// that needs the version keeps `self.schema_version`.
+    pub fn to_request(&self) -> CanonicalRequest {
+        CanonicalRequest {
+            factory_kind: self.factory_kind,
+            identity: self.identity.clone(),
+            revision: self.revision.clone(),
+            factory: self.factory.clone(),
+            actor: self.actor.clone(),
+            body: self.body.clone(),
+        }
+    }
+
     /// Field-level diff between the persisted snapshot and a presented request.
     fn diff_against(&self, presented: &CanonicalRequest) -> Vec<FieldDiff> {
         let mut diffs = Vec::new();
+
+        push_diff(
+            &mut diffs,
+            Field::FactoryKind,
+            self.factory_kind.as_str(),
+            presented.factory_kind.as_str(),
+        );
 
         // Identity is canonicalized on both sides: a case-only difference is
         // not a drift, matching how the digest itself canonicalizes identity.
@@ -83,17 +113,18 @@ fn push_diff(diffs: &mut Vec<FieldDiff>, field: Field, old: &str, new: &str) {
 /// Verify that a dispatch- or acceptance-time request matches the stored
 /// digest.
 ///
-/// Recomputes the digest over `presented` and compares it to `stored`. On a
-/// match the request is intact and the caller may proceed (`Ok(())`). On any
-/// difference it returns a [`Mismatch`] carrying the per-field diff (persisted
-/// vs presented) and both digest ids; the caller must **refuse to run** —
-/// never recompute-and-overwrite the stored digest.
+/// Recomputes the digest over `presented` under `stored_fields.schema_version`
+/// and compares it to `stored`. On a match the request is intact and the
+/// caller may proceed (`Ok(())`). On any difference it returns a [`Mismatch`]
+/// carrying the per-field diff (persisted vs presented) and both digest ids;
+/// the caller must **refuse to run** — never recompute-and-overwrite the
+/// stored digest.
 pub fn verify(
     stored: &Digest,
     stored_fields: &StoredFields,
     presented: &CanonicalRequest,
 ) -> Result<(), Mismatch> {
-    let presented_digest = compute(presented);
+    let presented_digest = compute_with_version(presented, stored_fields.schema_version);
     if presented_digest == *stored {
         return Ok(());
     }

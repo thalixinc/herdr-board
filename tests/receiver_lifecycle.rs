@@ -9,8 +9,9 @@ use std::sync::Arc;
 
 use herdr_board::{
     compute, prove_actor, receive, reconfirm, replay, startup_sweep, status_query,
-    CanonicalRequest, ExternalResponse, Field, Handoff, HandoffId, HandoffResult, HandoffTransport,
-    Identity, Outcome, ReceiverError, RequestRecord, Store, STALENESS_THRESHOLD,
+    CanonicalRequest, ExternalResponse, FactoryKind, Field, Handoff, HandoffId, HandoffResult,
+    HandoffTransport, Identity, Outcome, ReceiverError, RequestRecord, Store, SCHEMA_VERSION,
+    STALENESS_THRESHOLD,
 };
 
 /// A fake transport that returns a fixed decision and counts calls.
@@ -39,6 +40,7 @@ impl HandoffTransport for FakeTransport {
 fn request(body: &str) -> CanonicalRequest {
     let actor = prove_actor();
     CanonicalRequest {
+        factory_kind: FactoryKind::FactoryRequest,
         identity: Identity::new("ThalixInc", "herdr-board", 42),
         revision: "2026-09-12T00:00:00Z".into(),
         factory: "coordinator".into(),
@@ -233,6 +235,8 @@ fn two_racing_receives_yield_one_active_receipt() {
 
     // Simulate a racing writer that already acquired the active-attempt slot.
     let record = RequestRecord {
+        schema_version: SCHEMA_VERSION,
+        factory_kind: req.factory_kind,
         digest: compute(&req),
         identity: req.identity.canonical(),
         revision: req.revision.clone(),
