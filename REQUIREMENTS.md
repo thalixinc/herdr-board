@@ -40,13 +40,17 @@ factory pipeline (coordinator → planner → SDLC), not just run one agent.
 
 1. **One board tab per factory** — every factory's herdr workspace has its OWN board tab, scoped to
    that factory's GitHub project/repo. No global board; each crew sees its own work.
-2. **Epic / task hierarchy visible — NESTED view (like GitHub Projects roadmap)** — tasks indented
-   under their parent epic, one group row per epic. Mapping to the factory's actual encoding:
-   - Epic = issue with `epic` label (+ `sdlc:<stage>` label).
-   - Task = issue with `task`/`bug` label + body first line `Parent epic: <N>`.
-   This is a **2-level tree (epic → task)** today. A 3-level "epic → story → task" requires a NEW
-   `story` tier (label + `Parent story:` body line) — that is a DATA-MODEL decision, not a board
-   view, and is flagged as a separate open question.
+2. **4-LEVEL nested hierarchy (GitHub Projects full model)** — Initiative → Epic → Story/Task →
+   Sub-issue, tasks/stories indented under their parent, one group row per parent. The board must
+   render this nested roadmap/table view. Mapping to the factory's encoding:
+   - **Initiative** — NEW top tier (does NOT exist in cf today). Encodes as a label (`initiative`)
+     + `Parent initiative:` body line on its child epics (mirroring the `Parent epic:` convention).
+   - **Epic** = issue with `epic` label (+ `sdlc:<stage>` label).
+   - **Story / Task** = issue with `task` (or `story`/`bug`) label + `Parent epic: <N>` body line.
+   - **Sub-issue** = GitHub native sub-issue (the `sub-issue` link `cf sdlc ticket` already writes).
+   IMPORTANT: today cf only encodes **2 levels (epic → task)**. The Initiative and Story tiers are
+   DATA-MODEL additions that must be added to `cf-queue` / `cf board` (labels + `Parent …:` body
+   lines), NOT invented by the board alone. These are separate planning decisions, listed as open.
 3. **Filtering** — by label, assignee, epic, milestone, state, repository. This is first-class, not
    an afterthought.
 4. **Columns = workflow stages** — drag cards across columns (e.g. To Do → In Progress → Done),
@@ -56,6 +60,19 @@ factory pipeline (coordinator → planner → SDLC), not just run one agent.
 
 This UX layer is a HARD requirement, not a nice-to-have: the point of the board is to REPLACE
 "open GitHub to see status" with a native in-terminal kanban per factory.
+
+## Open data-model decisions (block the full 4-level view — decide before board build)
+
+1. **Initiative tier** — add `initiative` label + `Parent initiative:` body line to cf-queue / cf
+   board, so epics can be grouped under initiatives. (Founder wants this — GitHub Projects' top level.)
+2. **Story tier** — add `story` label + `Parent story:` body line for the epic → story → task
+   middle tier, OR treat story ≡ task (2-level under the epic). Founder to confirm 3 vs 4 levels of
+   task granularity.
+3. **Sub-issue** — cf already writes the sub-issue link; confirm the board reads it (Group by
+   sub-issue) rather than only `Parent epic:`.
+
+Until these are decided, the board can render the hierarchy that *exists* (epic → task, 2 levels),
+and the nested roadmap view simply gains levels as the data model grows.
 
 ## Non-goals
 
