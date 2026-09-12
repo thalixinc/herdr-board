@@ -61,6 +61,17 @@ factory pipeline (coordinator → planner → SDLC), not just run one agent.
 This UX layer is a HARD requirement, not a nice-to-have: the point of the board is to REPLACE
 "open GitHub to see status" with a native in-terminal kanban per factory.
 
+## Factory boundary (founder rule — MUST NOT violate)
+
+herdr-board owns ONLY the board: the tab, the nested view, filtering, sync DISPLAY, and the
+card→factory trigger BRIDGE (handing a request to the existing coordinator/planner). Any change to
+another product belongs in THAT product's own factory — herdr-board NEVER re-implements it:
+
+- cf / cf-queue / cf board (data model, labels, `Parent ...:` lines, initiative tier) → codefactory factory (#426).
+- herdr-axi (machine/attach verbs, transport) → herdr-axi factory.
+- The board CONSUMES what those factories produce; if the board needs something that doesn't exist
+  yet, file it in the owning factory and treat it as a dependency, not build it here.
+
 ## Open data-model decisions (block the full 4-level view — decide before board build)
 
 1. **Initiative tier** — add `initiative` label + `Parent initiative:` body line to cf-queue / cf
