@@ -1,0 +1,4 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running `target/debug/examples/receiver_demo`
+receipt 33559e54-3edd-44f2-9fb6-868127f0bf0a outcome accepted
+REFUSED: stored 9828fb4a8bd15abc != presented f53f84cf026383d1
