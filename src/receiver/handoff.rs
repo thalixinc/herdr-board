@@ -1,39 +1,53 @@
-//! The handoff seam: what the receiver hands to coordinator/planner, and the
-//! injectable transport that performs the one external call.
+//! The handoff seam: the injectable transport to the external coordinator/planner.
 
 use crate::digest::CanonicalRequest;
 use crate::outbox::HandoffId;
 
-/// One explicit "Process with factory" handoff: the caller's attempt id plus
-/// the canonical request to hand over.
-#[derive(Debug, Clone)]
+/// One handoff: the caller's id for this attempt, plus the request to dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Handoff {
     pub handoff_id: HandoffId,
     pub request: CanonicalRequest,
 }
 
-/// The coordinator/planner response, recorded verbatim but treated as
-/// **untrusted external data**: it never overrides the board's own committed
-/// state.
+/// The external coordinator/planner's response, recorded verbatim and treated
+/// as UNTRUSTED. It never overrides the board's own state or the digest.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternalResponse(pub String);
+pub struct ExternalResponse {
+    text: String,
+}
 
-impl AsRef<str> for ExternalResponse {
-    fn as_ref(&self) -> &str {
-        &self.0
+impl ExternalResponse {
+    /// Build a verbatim external response.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into() }
+    }
+
+    /// The raw response, verbatim.
+    pub fn as_str(&self) -> &str {
+        &self.text
     }
 }
 
-/// The result of the external handoff call.
+/// The external system's decision for one handoff.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HandoffResult {
-    pub accepted: bool,
-    pub response: ExternalResponse,
+pub enum HandoffResult {
+    /// Accepted by the coordinator/planner.
+    Accepted(ExternalResponse),
+    /// Refused by the coordinator/planner (a normal decision, not a failure).
+    Refused(ExternalResponse),
+    /// The transport could not deliver (unreachable, timeout, …). Outcome is
+    /// unknown: the receipt stays `handed-off` and the receiver surfaces a
+    /// [`super::ReceiverError::Transport`].
+    Failed(String),
 }
 
-/// The injectable seam for the single external call. The real
-/// coordinator/planner transport (subprocess/CLI) is a later slice; the
-/// receiver and outbox are fully testable against a fake implementation now.
+/// The injectable handoff seam. The real coordinator/planner transport is a
+/// later slice; tests and the demo inject a fake.
+///
+/// Async-free by contract: the receiver calls [`HandoffTransport::handoff`]
+/// synchronously between two committed write-ahead transactions.
 pub trait HandoffTransport {
-    fn handoff(&self, handoff: &Handoff) -> HandoffResult;
+    /// Perform the one external handoff and return its decision.
+    fn handoff(&self, request: &CanonicalRequest) -> HandoffResult;
 }

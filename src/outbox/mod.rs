@@ -19,8 +19,10 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
+mod intent;
 mod receipt;
 
+pub use intent::{CreateIntent, CreateOutcome, IntentId, Marker};
 pub use receipt::{HandoffId, Outcome, Receipt, ReceiptId, RequestRecord};
 
 /// Migration v1: `requests` + `receipts` + the two partial unique indexes.
@@ -60,6 +62,27 @@ CREATE UNIQUE INDEX idx_receipts_active_request
 
 CREATE UNIQUE INDEX idx_receipts_active_digest
     ON receipts(digest) WHERE outcome IN ('pending','handed-off');
+";
+
+/// Migration v2: the create-intent outbox (G4). One row per card→GitHub create
+/// intent, keyed by a unique idempotency marker.
+const MIGRATION_V2: &str = "
+CREATE TABLE create_intents (
+    intent_id    TEXT PRIMARY KEY NOT NULL,
+    marker       TEXT NOT NULL UNIQUE,
+    repo         TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    body         TEXT NOT NULL,
+    labels       TEXT NOT NULL,
+    assignee     TEXT,
+    factory_kind TEXT,
+    outcome      TEXT NOT NULL CHECK (outcome IN ('pending','issued','created','failed','cancelled')),
+    issue_number INTEGER,
+    reason       TEXT,
+    created_at   INTEGER NOT NULL,
+    issued_at    INTEGER,
+    finalized_at INTEGER
+);
 ";
 
 /// A single connection to the outbox SQLite database, with the migration and
@@ -126,6 +149,13 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
             .map_err(StoreError::Sqlite)?;
         tx.commit().map_err(StoreError::Sqlite)?;
     }
+    if version < 2 {
+        let tx = conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        tx.execute_batch(MIGRATION_V2).map_err(StoreError::Sqlite)?;
+        tx.pragma_update(None, "user_version", 2_i64)
+            .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+    }
     Ok(())
 }
 
@@ -157,6 +187,11 @@ pub enum StoreError {
     NotFound,
     /// The receipt is terminal; terminal outcomes are final.
     AlreadyFinal,
+    /// A guarded create-intent transition was attempted from the wrong outcome
+    /// (e.g. `mark_issued` on an already-`issued` or terminal intent).
+    CreateIntentNotPending,
+    /// A create intent with this idempotency marker already exists.
+    DuplicateMarker,
     /// Data read back from the database failed to decode (uuid, outcome, digest).
     InvalidData(String),
     /// An underlying SQLite error.
@@ -176,6 +211,15 @@ impl fmt::Display for StoreError {
             }
             StoreError::NotFound => write!(f, "receipt not found"),
             StoreError::AlreadyFinal => write!(f, "receipt is already terminal"),
+            StoreError::CreateIntentNotPending => {
+                write!(
+                    f,
+                    "create intent is not in the expected transitionable state"
+                )
+            }
+            StoreError::DuplicateMarker => {
+                write!(f, "a create intent with this marker already exists")
+            }
             StoreError::InvalidData(msg) => write!(f, "invalid stored data: {msg}"),
             StoreError::Sqlite(e) => write!(f, "sqlite error: {e}"),
             StoreError::Io(e) => write!(f, "io error: {e}"),

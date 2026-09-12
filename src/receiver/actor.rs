@@ -1,89 +1,89 @@
-//! Actor provenance: the board proves *who* asked, never trusting a payload
-//! claim. The trust root is herdr's injected workspace identity, falling back
-//! to the OS user.
+//! Actor provenance: who is the board acting as?
 
-/// A proven actor identity — the trust-root value captured at action time,
-/// never read from the request body or any persisted untrusted field.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Actor(pub String);
+use std::env;
 
-impl AsRef<str> for Actor {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-/// The channel that produced the trust-root value.
+/// How the actor identity was established.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActorSource {
-    /// `HERDR_WORKSPACE_ID` — the parent herdr process injected it.
-    HerdrWorkspace,
-    /// OS user (`USER`/`USERNAME`/`LOGNAME`) — fallback when herdr injected no
-    /// workspace id.
+    /// Injected by the parent herdr process via `HERDR_WORKSPACE_ID`.
+    HerdrWorkspaceIdentity,
+    /// The OS user the board process runs as (`$USER`, then `$USERNAME`/`$LOGNAME`).
     OsUser,
 }
 
 impl ActorSource {
-    /// The canonical provenance channel string recorded on every receipt.
+    /// The stable wire/DB form recorded on receipts and requests.
     pub fn as_str(&self) -> &'static str {
         match self {
-            ActorSource::HerdrWorkspace => "herdr-workspace-identity",
+            ActorSource::HerdrWorkspaceIdentity => "herdr-workspace-identity",
             ActorSource::OsUser => "os-user",
         }
     }
 }
 
-impl std::fmt::Display for ActorSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// The trust root: the process context herdr injected (or the OS user), plus
-/// which channel supplied it. This is the sole source of actor identity; it is
-/// set by the parent process, not by any card/prompt/SQLite content.
+/// A proven actor: the identity the board is acting as, plus how it was proven.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TrustRoot {
+pub struct Actor {
+    /// The identity value (workspace id or OS user), never read from a body.
     pub value: String,
+    /// The provenance channel that established `value`.
     pub source: ActorSource,
 }
 
+/// The board's trust root: the identity captured at "Process with factory".
+///
+/// Resolution order is fixed: `HERDR_WORKSPACE_ID` (set by the parent herdr
+/// process) wins; otherwise the OS user (`$USER`, then `$USERNAME`, then
+/// `$LOGNAME`). The value is never read from request bodies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustRoot {
+    value: String,
+    source: ActorSource,
+}
+
 impl TrustRoot {
-    /// Capture the trust-root identity from the process environment:
-    /// `HERDR_WORKSPACE_ID` first, then the OS user as a fallback.
+    /// Resolve the trust root from the process environment.
     pub fn from_env() -> TrustRoot {
-        if let Some(ws) = non_empty_env("HERDR_WORKSPACE_ID") {
+        if let Some(workspace) = non_empty_var("HERDR_WORKSPACE_ID") {
             return TrustRoot {
-                value: ws,
-                source: ActorSource::HerdrWorkspace,
+                value: workspace,
+                source: ActorSource::HerdrWorkspaceIdentity,
             };
         }
-        if let Some(user) = os_user() {
-            return TrustRoot {
-                value: user,
-                source: ActorSource::OsUser,
-            };
+        for key in ["USER", "USERNAME", "LOGNAME"] {
+            if let Some(user) = non_empty_var(key) {
+                return TrustRoot {
+                    value: user,
+                    source: ActorSource::OsUser,
+                };
+            }
         }
+        // Degenerate: no identity channel available. A stable sentinel still
+        // beats reading an identity out of a request body.
         TrustRoot {
-            value: "unknown".to_string(),
+            value: "unknown".to_owned(),
             source: ActorSource::OsUser,
+        }
+    }
+
+    /// Prove the current actor from this trust root.
+    pub fn prove(&self) -> Actor {
+        Actor {
+            value: self.value.clone(),
+            source: self.source,
         }
     }
 }
 
-/// Prove the actor: bind the captured trust root to an [`Actor`]. This is a
-/// pure derivation — the value is only ever the trust-root identity, never a
-/// payload claim.
-pub fn prove_actor(trust_root: &TrustRoot) -> Actor {
-    Actor(trust_root.value.clone())
+fn non_empty_var(key: &str) -> Option<String> {
+    env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 
-fn non_empty_env(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
-}
-
-fn os_user() -> Option<String> {
-    ["USER", "USERNAME", "LOGNAME"]
-        .iter()
-        .find_map(|key| non_empty_env(key))
+/// Prove the board's current actor from the process environment.
+///
+/// This is the single source of truth for "who is acting". The receiver
+/// enforces every handoff's `actor` field against this value — never against
+/// request bodies.
+pub fn prove_actor() -> Actor {
+    TrustRoot::from_env().prove()
 }
