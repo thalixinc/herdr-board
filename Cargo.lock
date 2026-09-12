@@ -467,6 +467,7 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "ratatui",
+ "sha2",
 ]
 
 [[package]]

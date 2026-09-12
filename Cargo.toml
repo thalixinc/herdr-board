@@ -5,8 +5,7 @@ edition = "2021"
 description = "Greenfield herdr kanban plugin: GitHub-issue board + card-to-factory trigger"
 license = "UNLICENSED"
 
-# Dependencies land with epic #8, gated on the herdr 0.9.0 plugin/tab/pane
-# compatibility qualification (REQUIREMENTS.md, critic repair G1).
 [dependencies]
 crossterm = "0.29.0"
 ratatui = "0.30.2"
+sha2 = "0.10"
