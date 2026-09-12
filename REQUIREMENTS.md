@@ -36,6 +36,23 @@ factory pipeline (coordinator → planner → SDLC), not just run one agent.
 | column | board placement | board-local; no silent upstream auto-execution |
 | harness/model/etc | execution settings | board-local for ordinary cards; factory cards use team routing |
 
+## Board UX (founder's primary use case — the "Jira/Trello" experience)
+
+1. **One board tab per factory** — every factory's herdr workspace has its OWN board tab, scoped to
+   that factory's GitHub project/repo. No global board; each crew sees its own work.
+2. **Epic / story / task hierarchy visible** — parent/child (epic→task) relationships are shown
+   as grouped/swimlane structure, not a flat card list. The `sdlc:*` / epic label hierarchy from
+   GitHub issues drives the grouping.
+3. **Filtering** — by label, assignee, epic, milestone, state, repository. This is first-class, not
+   an afterthought.
+4. **Columns = workflow stages** — drag cards across columns (e.g. To Do → In Progress → Done),
+   reflecting the SDLC/board stages; visual state is readable at a glance WITHOUT opening GitHub.
+5. **Visual at-a-glance** — the founder can see what every factory is doing from the board tab, no
+   GitHub visit required.
+
+This UX layer is a HARD requirement, not a nice-to-have: the point of the board is to REPLACE
+"open GitHub to see status" with a native in-terminal kanban per factory.
+
 ## Non-goals
 
 - No full issue replication (comments/attachments link to GitHub initially).
