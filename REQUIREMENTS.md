@@ -40,9 +40,13 @@ factory pipeline (coordinator → planner → SDLC), not just run one agent.
 
 1. **One board tab per factory** — every factory's herdr workspace has its OWN board tab, scoped to
    that factory's GitHub project/repo. No global board; each crew sees its own work.
-2. **Epic / story / task hierarchy visible** — parent/child (epic→task) relationships are shown
-   as grouped/swimlane structure, not a flat card list. The `sdlc:*` / epic label hierarchy from
-   GitHub issues drives the grouping.
+2. **Epic / task hierarchy visible — NESTED view (like GitHub Projects roadmap)** — tasks indented
+   under their parent epic, one group row per epic. Mapping to the factory's actual encoding:
+   - Epic = issue with `epic` label (+ `sdlc:<stage>` label).
+   - Task = issue with `task`/`bug` label + body first line `Parent epic: <N>`.
+   This is a **2-level tree (epic → task)** today. A 3-level "epic → story → task" requires a NEW
+   `story` tier (label + `Parent story:` body line) — that is a DATA-MODEL decision, not a board
+   view, and is flagged as a separate open question.
 3. **Filtering** — by label, assignee, epic, milestone, state, repository. This is first-class, not
    an afterthought.
 4. **Columns = workflow stages** — drag cards across columns (e.g. To Do → In Progress → Done),
