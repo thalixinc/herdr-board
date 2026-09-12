@@ -1,0 +1,20 @@
+id = "thalixinc.herdr-board"
+name = "herdr-board"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "GitHub-issue kanban board with card-to-factory trigger"
+platforms = ["macos", "linux"]
+
+# Build runs on `herdr plugin install` (GitHub). `herdr plugin link` does NOT
+# run build commands, so local authors run `cargo build --release` themselves.
+[[build]]
+command = ["cargo", "build", "--release"]
+
+# The board is a native Herdr TAB (REQUIREMENTS.md: `herdr plugin pane open
+# --placement tab`). The pane command is the plugin's TUI binary, built to
+# target/release/herdr-board. Herdr runs it with the plugin root as cwd.
+[[panes]]
+id = "board"
+title = "Board"
+placement = "tab"
+command = ["./target/release/herdr-board"]
