@@ -1,53 +1,95 @@
-//! Reconciliation entrypoints: convert "uncertain" handoffs back to "decided"
-//! without ever starting work. Every one of these is a read-only, idempotent
-//! no-op that returns the existing receipt — re-dispatch and status queries are
-//! human-gated actions built on [`super::receive`] and the store, never
-//! auto-dispatched here.
+//! Startup sweep and human reconciliation: surface stale `handed-off` receipts
+//! and re-dispatch or answer them idempotently.
 
 use std::time::Duration;
 
-use crate::outbox::{HandoffId, Receipt, Store};
+use crate::digest::compute_with_version;
+use crate::outbox::{Outcome, Receipt, Store, StoreError};
 
-use super::ReceiverError;
+use super::{
+    reconstruct_request, ExternalResponse, HandoffResult, HandoffTransport, ReceiverError,
+};
 
-/// How long a `handed-off` receipt may sit without an ack before it is surfaced
-/// as "pending, outcome unknown" in the startup sweep.
+/// A `handed-off` receipt older than this is surfaced as "outcome unknown".
 pub const STALENESS_THRESHOLD: Duration = Duration::from_secs(5 * 60);
 
-/// Scan for non-terminal receipts on pane open. The returned rows are the
-/// durable in-flight attempts (pending or handed-off); the board surfaces each
-/// `handed-off` row past [`STALENESS_THRESHOLD`] as a visible "outcome unknown"
-/// card. This surfaces — it never re-dispatches.
-pub fn startup_sweep(store: &Store) -> Result<Vec<Receipt>, ReceiverError> {
-    store.list_non_terminal().map_err(ReceiverError::Store)
+/// Surface non-terminal receipts that need attention: `handed-off` receipts
+/// older than [`STALENESS_THRESHOLD`], oldest first.
+///
+/// `now` is a unix-seconds timestamp (matching `Receipt::created_at`).
+pub fn startup_sweep(store: &Store, now: i64) -> Result<Vec<Receipt>, ReceiverError> {
+    let threshold = STALENESS_THRESHOLD.as_secs() as i64;
+    let mut stale = Vec::new();
+    for receipt in store.list_non_terminal().map_err(ReceiverError::Store)? {
+        if receipt.outcome == Outcome::HandedOff && now - receipt.created_at >= threshold {
+            stale.push(receipt);
+        }
+    }
+    Ok(stale)
 }
 
-/// Idempotent re-delivery of an attempt: return the existing receipt, if any,
-/// without re-dispatching or re-accepting.
-pub fn replay(store: &Store, handoff_id: &HandoffId) -> Result<Option<Receipt>, ReceiverError> {
-    store
-        .get_by_handoff_id(handoff_id)
-        .map_err(ReceiverError::Store)
+/// Re-confirm a `handed-off` receipt: re-dispatch the same digest + same
+/// handoff.
+///
+/// Idempotent: one handoff id maps to one receipt, and a terminal receipt
+/// refuses further transitions, so re-confirming can never double-accept.
+pub fn reconfirm(
+    store: &Store,
+    receipt: &Receipt,
+    transport: &impl HandoffTransport,
+) -> Result<Receipt, ReceiverError> {
+    let stored_fields = reconstruct_request(store, receipt)?;
+    let request = stored_fields.to_request();
+    // The persisted record must still match the receipt's digest, under the
+    // record's own schema version; otherwise the board refuses rather than
+    // re-dispatching a drifted request.
+    if compute_with_version(&request, stored_fields.schema_version) != receipt.digest {
+        return Err(ReceiverError::Store(StoreError::InvalidData(
+            "persisted request does not match receipt digest".to_owned(),
+        )));
+    }
+    match transport.handoff(&request) {
+        HandoffResult::Accepted(response) => store.transition_to(
+            &receipt.receipt_id,
+            Outcome::Accepted,
+            Some(response.as_str()),
+        ),
+        HandoffResult::Refused(response) => store.transition_to(
+            &receipt.receipt_id,
+            Outcome::Refused,
+            Some(response.as_str()),
+        ),
+        HandoffResult::Failed(message) => return Err(ReceiverError::Transport(message)),
+    }
+    .map_err(ReceiverError::Store)
 }
 
-/// Human re-confirm of an uncertain (`handed-off`) receipt. As a no-op it
-/// returns the existing receipt; an actual re-dispatch goes through
-/// [`super::receive`] with the same handoff id (idempotent — never a double
-/// accept).
-pub fn reconfirm(store: &Store, handoff_id: &HandoffId) -> Result<Option<Receipt>, ReceiverError> {
-    store
-        .get_by_handoff_id(handoff_id)
-        .map_err(ReceiverError::Store)
-}
-
-/// Status query against coordinator/planner. As a no-op it returns the existing
-/// receipt; a real query records the external answer verbatim but the board's
-/// own receipt (and the digest it verified) stays the final-state authority.
+/// Record an out-of-band external answer on a `handed-off` receipt.
+///
+/// The board stays the authority: the answer is stored verbatim and only ever
+/// transitions the receipt — it never rewrites the digest or the persisted
+/// request.
 pub fn status_query(
     store: &Store,
-    handoff_id: &HandoffId,
-) -> Result<Option<Receipt>, ReceiverError> {
+    receipt: &Receipt,
+    accepted: bool,
+    response: &ExternalResponse,
+) -> Result<Receipt, ReceiverError> {
+    let outcome = if accepted {
+        Outcome::Accepted
+    } else {
+        Outcome::Refused
+    };
     store
-        .get_by_handoff_id(handoff_id)
+        .transition_to(&receipt.receipt_id, outcome, Some(response.as_str()))
         .map_err(ReceiverError::Store)
+}
+
+/// Replay a receipt: an idempotent no-op that returns the receipt unchanged.
+/// Replaying never re-runs the handoff.
+pub fn replay(store: &Store, receipt: &Receipt) -> Result<Receipt, ReceiverError> {
+    store
+        .get_by_handoff_id(&receipt.handoff_id)
+        .map_err(ReceiverError::Store)?
+        .ok_or_else(|| ReceiverError::Store(StoreError::NotFound))
 }

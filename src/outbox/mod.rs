@@ -19,8 +19,11 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
+mod draft;
+mod intent;
 mod receipt;
 
+pub use intent::{CreateIntent, CreateOutcome, IntentId, Marker};
 pub use receipt::{HandoffId, Outcome, Receipt, ReceiptId, RequestRecord};
 
 /// Migration v1: `requests` + `receipts` + the two partial unique indexes.
@@ -60,6 +63,56 @@ CREATE UNIQUE INDEX idx_receipts_active_request
 
 CREATE UNIQUE INDEX idx_receipts_active_digest
     ON receipts(digest) WHERE outcome IN ('pending','handed-off');
+";
+
+/// Migration v2: the create-intent outbox (G4). One row per card→GitHub create
+/// intent, keyed by a unique idempotency marker.
+const MIGRATION_V2: &str = "
+CREATE TABLE create_intents (
+    intent_id    TEXT PRIMARY KEY NOT NULL,
+    marker       TEXT NOT NULL UNIQUE,
+    repo         TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    body         TEXT NOT NULL,
+    labels       TEXT NOT NULL,
+    assignee     TEXT,
+    factory_kind TEXT,
+    outcome      TEXT NOT NULL CHECK (outcome IN ('pending','issued','created','failed','cancelled')),
+    issue_number INTEGER,
+    reason       TEXT,
+    created_at   INTEGER NOT NULL,
+    issued_at    INTEGER,
+    finalized_at INTEGER
+);
+";
+
+/// Migration v3 (G5): extend `requests` with the schema version and the
+/// factory-kind discriminator.
+///
+/// `schema_version DEFAULT 1` is the sentinel: pre-G5 rows read back as v1 and
+/// verify under the v1 layout via version-on-record. `factory_kind DEFAULT
+/// 'factory-request'` is honest — a `CanonicalRequest` only ever came from a
+/// factory-request card.
+const MIGRATION_V3: &str = "
+ALTER TABLE requests ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE requests ADD COLUMN factory_kind TEXT NOT NULL DEFAULT 'factory-request';
+";
+
+/// Migration v4 (G5): the board's draft store — one row per card draft, with
+/// its `factory_kind` written in the same INSERT (atomic, never a separate
+/// later update) — plus the G4 create-intent backfill so no intent row carries
+/// a NULL `factory_kind`.
+const MIGRATION_V4: &str = "
+CREATE TABLE drafts (
+    draft_id     TEXT PRIMARY KEY NOT NULL,
+    factory_kind TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    body         TEXT NOT NULL,
+    created_at   INTEGER NOT NULL,
+    published_at INTEGER
+);
+
+UPDATE create_intents SET factory_kind = 'ordinary' WHERE factory_kind IS NULL;
 ";
 
 /// A single connection to the outbox SQLite database, with the migration and
@@ -126,6 +179,27 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
             .map_err(StoreError::Sqlite)?;
         tx.commit().map_err(StoreError::Sqlite)?;
     }
+    if version < 2 {
+        let tx = conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        tx.execute_batch(MIGRATION_V2).map_err(StoreError::Sqlite)?;
+        tx.pragma_update(None, "user_version", 2_i64)
+            .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+    }
+    if version < 3 {
+        let tx = conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        tx.execute_batch(MIGRATION_V3).map_err(StoreError::Sqlite)?;
+        tx.pragma_update(None, "user_version", 3_i64)
+            .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+    }
+    if version < 4 {
+        let tx = conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        tx.execute_batch(MIGRATION_V4).map_err(StoreError::Sqlite)?;
+        tx.pragma_update(None, "user_version", 4_i64)
+            .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+    }
     Ok(())
 }
 
@@ -157,6 +231,11 @@ pub enum StoreError {
     NotFound,
     /// The receipt is terminal; terminal outcomes are final.
     AlreadyFinal,
+    /// A guarded create-intent transition was attempted from the wrong outcome
+    /// (e.g. `mark_issued` on an already-`issued` or terminal intent).
+    CreateIntentNotPending,
+    /// A create intent with this idempotency marker already exists.
+    DuplicateMarker,
     /// Data read back from the database failed to decode (uuid, outcome, digest).
     InvalidData(String),
     /// An underlying SQLite error.
@@ -176,6 +255,15 @@ impl fmt::Display for StoreError {
             }
             StoreError::NotFound => write!(f, "receipt not found"),
             StoreError::AlreadyFinal => write!(f, "receipt is already terminal"),
+            StoreError::CreateIntentNotPending => {
+                write!(
+                    f,
+                    "create intent is not in the expected transitionable state"
+                )
+            }
+            StoreError::DuplicateMarker => {
+                write!(f, "a create intent with this marker already exists")
+            }
             StoreError::InvalidData(msg) => write!(f, "invalid stored data: {msg}"),
             StoreError::Sqlite(e) => write!(f, "sqlite error: {e}"),
             StoreError::Io(e) => write!(f, "io error: {e}"),

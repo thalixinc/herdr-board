@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use super::{Store, StoreError};
 use crate::digest::{Digest, DigestId};
+use crate::kind::FactoryKind;
 
 /// A UUID v4 receipt identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -121,6 +122,11 @@ impl Outcome {
 /// carries only the fields the caller owns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestRecord {
+    /// The digest schema version this request was canonicalized under
+    /// (version-on-record: [`crate::digest::SCHEMA_VERSION`] for new records).
+    pub schema_version: u64,
+    /// The card's factory-kind discriminator (G5).
+    pub factory_kind: FactoryKind,
     /// The full G2 digest — the idempotency key (unique per input).
     pub digest: Digest,
     /// Canonical `owner/repo#number`.
@@ -184,13 +190,16 @@ impl Store {
 
         tx.execute(
             "INSERT INTO requests \
-             (request_id, digest, digest_id, identity, revision, factory, actor, actor_source, body, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
+             (request_id, digest, digest_id, schema_version, factory_kind, \
+              identity, revision, factory, actor, actor_source, body, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
              ON CONFLICT(digest) DO NOTHING",
             params![
                 Uuid::new_v4().to_string(),
                 digest_bytes,
                 digest_id_hex,
+                request.schema_version as i64,
+                request.factory_kind.as_str(),
                 request.identity,
                 request.revision,
                 request.factory,
@@ -322,7 +331,8 @@ impl Store {
     /// denormalize `body`.
     pub fn get_request_by_id(&self, request_id: &str) -> Result<Option<RequestRecord>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT digest, identity, revision, factory, actor, actor_source, body \
+            "SELECT digest, schema_version, factory_kind, identity, revision, factory, \
+             actor, actor_source, body \
              FROM requests WHERE request_id = ?1",
         )?;
         let mut rows = stmt.query(params![request_id])?;
@@ -378,14 +388,22 @@ fn digest_from_blob(blob: Vec<u8>) -> Result<Digest, StoreError> {
 
 fn read_request(row: &rusqlite::Row<'_>) -> Result<RequestRecord, StoreError> {
     let digest_blob: Vec<u8> = row.get(0)?;
-    let identity: String = row.get(1)?;
-    let revision: String = row.get(2)?;
-    let factory: String = row.get(3)?;
-    let actor: String = row.get(4)?;
-    let actor_source: String = row.get(5)?;
-    let body: String = row.get(6)?;
+    let schema_version: i64 = row.get(1)?;
+    let factory_kind: String = row.get(2)?;
+    let identity: String = row.get(3)?;
+    let revision: String = row.get(4)?;
+    let factory: String = row.get(5)?;
+    let actor: String = row.get(6)?;
+    let actor_source: String = row.get(7)?;
+    let body: String = row.get(8)?;
+
+    let factory_kind = factory_kind
+        .parse::<FactoryKind>()
+        .map_err(|e: crate::kind::InvalidFactoryKind| StoreError::InvalidData(e.to_string()))?;
 
     Ok(RequestRecord {
+        schema_version: schema_version as u64,
+        factory_kind,
         digest: digest_from_blob(digest_blob)?,
         identity,
         revision,

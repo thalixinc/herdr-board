@@ -5,6 +5,7 @@ use std::fmt;
 use sha2::{Digest as _, Sha256};
 
 use super::canonical::CanonicalRequest;
+use super::SCHEMA_VERSION;
 
 /// The full 32-byte SHA-256 digest — the source of truth for comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -54,10 +55,18 @@ impl fmt::Display for DigestId {
     }
 }
 
-/// Compute the canonical work digest for a request: SHA-256 over the
-/// version-first length-prefixed framing of the five canonical fields.
+/// Compute the canonical work digest under the current schema: SHA-256 over
+/// the version-first length-prefix framing of the six canonical fields.
 pub fn compute(request: &CanonicalRequest) -> Digest {
-    digest_bytes(&request.framed_bytes())
+    compute_with_version(request, SCHEMA_VERSION)
+}
+
+/// Compute the digest under an explicit schema version, selecting that
+/// version's field layout. Used by [`compute`] and by version-on-record
+/// verification: [`super::verify`] canonicalizes under the persisted record's
+/// version rather than the compile-time constant.
+pub fn compute_with_version(request: &CanonicalRequest, version: u64) -> Digest {
+    digest_bytes(&request.framed_bytes_with_version(version))
 }
 
 fn digest_bytes(bytes: &[u8]) -> Digest {
@@ -80,14 +89,16 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{compute, digest_bytes, CanonicalRequest, Digest};
-    use crate::digest::Identity;
+    use super::{compute, compute_with_version, CanonicalRequest, Digest};
+    use crate::digest::{Identity, SCHEMA_VERSION};
+    use crate::kind::FactoryKind;
 
     /// The pinned golden fixture. Any change to framing, field order, or
     /// version that alters the digest inputs must fail this test — the only
     /// sanctioned fix is a `SCHEMA_VERSION` bump (which is itself a new vector).
     fn golden_request() -> CanonicalRequest {
         CanonicalRequest {
+            factory_kind: FactoryKind::FactoryRequest,
             identity: Identity::new("ThalixInc", "herdr-board", 42),
             revision: "r1".into(),
             factory: "coordinator".into(),
@@ -98,19 +109,19 @@ mod tests {
 
     #[test]
     fn golden_vector() {
-        // Fixture:
-        //   identity = thalixinc/herdr-board#42
-        //   revision = r1
-        //   factory  = coordinator
-        //   actor    = founder
-        //   body     = "build the board\nwith care"
-        //   version  = 1
+        // Fixture (version 2):
+        //   factory_kind = factory-request
+        //   identity     = thalixinc/herdr-board#42
+        //   revision     = r1
+        //   factory      = coordinator
+        //   actor        = founder
+        //   body         = "build the board\nwith care"
         let digest = compute(&golden_request());
         assert_eq!(
             digest.to_hex(),
-            "b6644706c905824decdd360e5dfdb6caf4e81090909c494583a0215cefa1a5e9"
+            "9570b03cf8d9a02b93c2bc363283b7e6ed4479b955c86f63808b32eca470c8d6"
         );
-        assert_eq!(digest.digest_id().to_hex(), "b6644706c905824d");
+        assert_eq!(digest.digest_id().to_hex(), "9570b03cf8d9a02b");
     }
 
     #[test]
@@ -134,11 +145,12 @@ mod tests {
 
     #[test]
     fn version_is_inside_the_hash() {
-        // Same five fields, different schema version → different digest.
-        let v1 = digest_bytes(&golden_request().framed_bytes_with_version(1));
-        let v2 = digest_bytes(&golden_request().framed_bytes_with_version(2));
+        // Same six fields, different schema version → different digest.
+        let v1 = compute_with_version(&golden_request(), 1);
+        let v2 = compute_with_version(&golden_request(), 2);
         assert_ne!(v1, v2, "a version bump must change the digest");
-        assert_eq!(v1, compute(&golden_request()));
+        assert_eq!(v2, compute(&golden_request()));
+        assert_eq!(v2, compute_with_version(&golden_request(), SCHEMA_VERSION));
     }
 
     #[test]
