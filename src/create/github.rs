@@ -52,6 +52,33 @@ pub enum CreateResult {
     Uncertain(String),
 }
 
+/// The board's push patch: which GitHub-canonical fields to change on an
+/// existing issue.
+///
+/// `title`/`body`/`labels` are single-`Option` (replace-on-set; `labels`
+/// replaces the whole set). `assignee`/`milestone` are double-`Option`:
+/// `None` leaves the field unchanged, `Some(None)` clears it, and
+/// `Some(Some(v))` sets it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IssuePatch {
+    pub title: Option<String>,
+    pub body: Option<String>,
+    pub labels: Option<Vec<String>>,
+    pub assignee: Option<Option<String>>,
+    pub milestone: Option<Option<String>>,
+}
+
+/// The three-way result of an update (PATCH) call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateResult {
+    /// GitHub applied the patch; `updated_at` is the new revision token.
+    Updated { updated_at: String },
+    /// GitHub returned a definite error — nothing was changed.
+    Failed(String),
+    /// The response was lost — outcome unknown, must be resolved manually.
+    Uncertain(String),
+}
+
 /// A candidate issue for manual linking (a suggestion, never an auto-decision).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
@@ -96,4 +123,8 @@ pub trait GitHubClient {
 
     /// Look up a known issue by number (existence check for manual linking).
     fn get_issue(&self, repo: &RepoIdentity, number: u64) -> Option<Issue>;
+
+    /// Patch an existing issue. Only the fields present in `patch` are sent;
+    /// on success the result carries the response's new `updated_at`.
+    fn update_issue(&self, repo: &RepoIdentity, number: u64, patch: &IssuePatch) -> UpdateResult;
 }

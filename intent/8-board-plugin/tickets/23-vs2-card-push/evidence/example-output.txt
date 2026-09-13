@@ -1,0 +1,7 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running `target/debug/examples/push_demo`
+published: thalixinc/herdr-board#1 revision=r1
+edit: pending write recorded
+push: CONFLICT
+  title: "Fix sync (GitHub changed)" -> "Fix sync (edited)"
+applied: conflict=none title="Fix sync (edited)" revision=r2

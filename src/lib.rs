@@ -10,6 +10,7 @@ pub mod create;
 pub mod digest;
 pub mod kind;
 pub mod outbox;
+pub mod push;
 pub mod receiver;
 pub mod sync;
 
@@ -17,7 +18,7 @@ pub use card::{create_draft, factory_kind_of, promote_to_factory_request, CardEr
 
 pub use create::{
     cancel, candidates, issue, link, marker_comment, Candidate, CreateError, CreateResult,
-    GitHubClient, Issue, Publisher, RepoIdentity,
+    GitHubClient, Issue, IssuePatch, Publisher, RepoIdentity, UpdateResult,
 };
 pub use digest::{
     compute, compute_with_version, verify, CanonicalRequest, Digest, DigestId, Field, FieldDiff,
@@ -26,8 +27,10 @@ pub use digest::{
 pub use kind::FactoryKind;
 pub use outbox::{
     CanonicalFields, Card, CardField, CardFieldDiff, Conflict, CreateIntent, CreateOutcome,
-    HandoffId, IntentId, Marker, Outcome, Receipt, ReceiptId, RequestRecord, Store,
+    HandoffId, IntentId, Marker, Outcome, PendingWrite, Receipt, ReceiptId, RequestRecord, Store,
+    WriteOutcome,
 };
+pub use push::{apply_push, discard_push, publish_draft, push_changes, PushError};
 pub use receiver::{
     prove_actor, receive, reconfirm, replay, startup_sweep, status_query, Actor, ActorSource,
     ExternalResponse, Handoff, HandoffResult, HandoffTransport, Receiver, ReceiverError, TrustRoot,

@@ -22,10 +22,12 @@ use rusqlite::Connection;
 mod cards;
 mod draft;
 mod intent;
+mod pending;
 mod receipt;
 
 pub use cards::{CanonicalFields, Card, CardField, CardFieldDiff, Conflict};
 pub use intent::{CreateIntent, CreateOutcome, IntentId, Marker};
+pub use pending::{PendingWrite, WriteOutcome};
 pub use receipt::{HandoffId, Outcome, Receipt, ReceiptId, RequestRecord};
 
 /// Migration v1: `requests` + `receipts` + the two partial unique indexes.
@@ -153,6 +155,29 @@ CREATE TABLE card_conflicts (
 );
 ";
 
+/// Migration v6 (VS2): the pending-write store — one row per card→issue update
+/// awaiting a push, keyed by the issue identity, with a partial unique index
+/// so at most one non-terminal write is unresolved per card.
+const MIGRATION_V6: &str = "
+CREATE TABLE pending_writes (
+    owner         TEXT,
+    repo          TEXT,
+    number        INTEGER,
+    base_revision TEXT NOT NULL,
+    title         TEXT,
+    body          TEXT,
+    labels        TEXT,
+    assignee      TEXT,
+    milestone     TEXT,
+    outcome       TEXT NOT NULL CHECK (outcome IN ('pending','failed','uncertain','written','discarded')),
+    updated_at    TEXT,
+    PRIMARY KEY (owner, repo, number)
+);
+
+CREATE UNIQUE INDEX idx_pending_writes_unresolved
+    ON pending_writes(owner, repo, number) WHERE outcome IN ('pending','failed','uncertain');
+";
+
 /// A single connection to the outbox SQLite database, with the migration and
 /// receipt operations.
 pub struct Store {
@@ -242,6 +267,13 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
         let tx = conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
         tx.execute_batch(MIGRATION_V5).map_err(StoreError::Sqlite)?;
         tx.pragma_update(None, "user_version", 5_i64)
+            .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+    }
+    if version < 6 {
+        let tx = conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        tx.execute_batch(MIGRATION_V6).map_err(StoreError::Sqlite)?;
+        tx.pragma_update(None, "user_version", 6_i64)
             .map_err(StoreError::Sqlite)?;
         tx.commit().map_err(StoreError::Sqlite)?;
     }

@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use herdr_board::{
     cancel, candidates, issue, link, marker_comment, Candidate, CreateError, CreateIntent,
-    CreateOutcome, CreateResult, FactoryKind, GitHubClient, Issue, Marker, RepoIdentity, Store,
+    CreateOutcome, CreateResult, FactoryKind, GitHubClient, Issue, IssuePatch, Marker,
+    RepoIdentity, Store, UpdateResult,
 };
 
 fn now_unix() -> i64 {
@@ -117,6 +118,17 @@ impl GitHubClient for FakeGitHubClient {
                 number: i.number,
                 title: i.title.clone(),
             })
+    }
+
+    fn update_issue(
+        &self,
+        _repo: &RepoIdentity,
+        _number: u64,
+        _patch: &IssuePatch,
+    ) -> UpdateResult {
+        UpdateResult::Updated {
+            updated_at: "2026-09-12T00:00:00Z".to_string(),
+        }
     }
 }
 
