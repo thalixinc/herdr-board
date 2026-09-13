@@ -14,6 +14,7 @@ pub mod outbox;
 pub mod push;
 pub mod receiver;
 pub mod sync;
+pub mod ui;
 
 pub use card::{create_draft, factory_kind_of, promote_to_factory_request, CardError, Draft};
 
@@ -43,6 +44,7 @@ pub use sync::{
     apply_changes, defer_changes, sync, Credentials, IssueFull, PullClient, RealGitHubClient,
     SyncError, SyncSummary, DEFAULT_COLUMN,
 };
+pub use ui::{render, App, BoardColumn, BoardModel, Filters, ParentRef};
 
 /// The plugin identity, surfaced to the herdr pane metadata.
 pub const PLUGIN_NAME: &str = "herdr-board";
