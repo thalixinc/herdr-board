@@ -19,10 +19,12 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
+mod cards;
 mod draft;
 mod intent;
 mod receipt;
 
+pub use cards::{CanonicalFields, Card, CardField, CardFieldDiff, Conflict};
 pub use intent::{CreateIntent, CreateOutcome, IntentId, Marker};
 pub use receipt::{HandoffId, Outcome, Receipt, ReceiptId, RequestRecord};
 
@@ -115,6 +117,42 @@ CREATE TABLE drafts (
 UPDATE create_intents SET factory_kind = 'ordinary' WHERE factory_kind IS NULL;
 ";
 
+/// Migration v5 (VS1): the card store — one row per pulled GitHub issue, keyed
+/// by the composite identity `(owner, repo, number)`, plus the visible-conflict
+/// diffs.
+const MIGRATION_V5: &str = "
+CREATE TABLE cards (
+    owner        TEXT,
+    repo         TEXT,
+    number       INTEGER,
+    url          TEXT,
+    title        TEXT,
+    body         TEXT,
+    state        TEXT,
+    state_reason TEXT,
+    labels       TEXT,
+    assignee     TEXT,
+    milestone    TEXT,
+    column       TEXT NOT NULL,
+    factory_kind TEXT NOT NULL DEFAULT 'ordinary',
+    revision     TEXT,
+    conflict     TEXT NOT NULL DEFAULT 'none' CHECK (conflict IN ('none','apply-pending')),
+    synced_at    INTEGER,
+    PRIMARY KEY (owner, repo, number)
+);
+
+CREATE TABLE card_conflicts (
+    owner       TEXT,
+    repo        TEXT,
+    number      INTEGER,
+    field       TEXT,
+    old_value   TEXT,
+    new_value   TEXT,
+    detected_at INTEGER,
+    PRIMARY KEY (owner, repo, number, field)
+);
+";
+
 /// A single connection to the outbox SQLite database, with the migration and
 /// receipt operations.
 pub struct Store {
@@ -197,6 +235,13 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
         let tx = conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
         tx.execute_batch(MIGRATION_V4).map_err(StoreError::Sqlite)?;
         tx.pragma_update(None, "user_version", 4_i64)
+            .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+    }
+    if version < 5 {
+        let tx = conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        tx.execute_batch(MIGRATION_V5).map_err(StoreError::Sqlite)?;
+        tx.pragma_update(None, "user_version", 5_i64)
             .map_err(StoreError::Sqlite)?;
         tx.commit().map_err(StoreError::Sqlite)?;
     }

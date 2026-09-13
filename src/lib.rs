@@ -24,8 +24,8 @@ pub use digest::{
 };
 pub use kind::FactoryKind;
 pub use outbox::{
-    CreateIntent, CreateOutcome, HandoffId, IntentId, Marker, Outcome, Receipt, ReceiptId,
-    RequestRecord, Store,
+    CanonicalFields, Card, CardField, CardFieldDiff, Conflict, CreateIntent, CreateOutcome,
+    HandoffId, IntentId, Marker, Outcome, Receipt, ReceiptId, RequestRecord, Store,
 };
 pub use receiver::{
     prove_actor, receive, reconfirm, replay, startup_sweep, status_query, Actor, ActorSource,
