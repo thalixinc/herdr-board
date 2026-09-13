@@ -45,8 +45,8 @@ pub use sync::{
     SyncError, SyncSummary, DEFAULT_COLUMN,
 };
 pub use ui::{
-    dispatch, render, run_loop, Action, App, BoardColumn, BoardModel, Deps, Filters, KeyMap,
-    ParentRef, UiError,
+    dispatch, render, run_loop, Action, App, BoardColumn, BoardModel, Deps, FilterDimension,
+    FilterInput, Filters, KeyMap, ParentRef, UiError,
 };
 
 /// The plugin identity, surfaced to the herdr pane metadata.

@@ -199,6 +199,13 @@ pub struct Filters {
     pub state: Option<String>,
     /// Case-insensitive title substring.
     pub title: Option<String>,
+    /// Epic by issue number: the epic itself or a child whose
+    /// `Parent epic: <N>` points at it.
+    pub epic: Option<u64>,
+    /// Exact milestone match.
+    pub milestone: Option<String>,
+    /// Exact repository match (`owner/repo`, lowercased).
+    pub repository: Option<String>,
 }
 
 impl Filters {
@@ -225,6 +232,25 @@ impl Filters {
         if let Some(title) = &self.title {
             let title = title.to_ascii_lowercase();
             if !card.fields.title.to_ascii_lowercase().contains(&title) {
+                return false;
+            }
+        }
+        if let Some(epic) = self.epic {
+            let is_self = is_epic(card) && card.identity.number == epic;
+            let is_child = parent_of(&card.fields.body).is_some_and(|p| p.number == epic);
+            if !(is_self || is_child) {
+                return false;
+            }
+        }
+        if let Some(milestone) = &self.milestone {
+            if card.fields.milestone.as_deref() != Some(milestone.as_str()) {
+                return false;
+            }
+        }
+        if let Some(repository) = &self.repository {
+            let owner_repo =
+                format!("{}/{}", card.identity.owner, card.identity.repo).to_lowercase();
+            if owner_repo != repository.to_lowercase() {
                 return false;
             }
         }
@@ -383,6 +409,103 @@ mod tests {
             ..Filters::default()
         };
         assert!(any.matches(&card));
+    }
+
+    #[test]
+    fn filters_match_all_six_dimensions() {
+        // Epic: matches the epic itself and its child, excludes a non-child.
+        let epic = with_labels(card(10, "to-do", "the epic"), &["epic"]);
+        let child = with_body(card(11, "to-do", "child of epic"), "Parent epic: 10");
+        let non_child = card(12, "to-do", "unrelated");
+        let by_epic = Filters {
+            epic: Some(10),
+            ..Filters::default()
+        };
+        assert!(
+            by_epic.matches(&epic),
+            "epic filter matches the epic itself"
+        );
+        assert!(by_epic.matches(&child), "epic filter matches its child");
+        assert!(
+            !by_epic.matches(&non_child),
+            "epic filter excludes a non-child"
+        );
+
+        // Milestone: exact match.
+        let mut with_ms = card(13, "to-do", "milestoned");
+        with_ms.fields.milestone = Some("v1".to_owned());
+        let by_ms = Filters {
+            milestone: Some("v1".to_owned()),
+            ..Filters::default()
+        };
+        assert!(by_ms.matches(&with_ms), "milestone exact match");
+        assert!(!by_ms.matches(&card(14, "to-do", "no milestone")));
+
+        // Repository: owner/repo (lowercased) match.
+        let repo_card = card(15, "to-do", "in repo"); // thalixinc/herdr-board
+        let by_repo = Filters {
+            repository: Some("thalixinc/herdr-board".to_owned()),
+            ..Filters::default()
+        };
+        assert!(by_repo.matches(&repo_card), "repository owner/repo match");
+        let other_repo = Filters {
+            repository: Some("other/repo".to_owned()),
+            ..Filters::default()
+        };
+        assert!(
+            !other_repo.matches(&repo_card),
+            "repository mismatch excluded"
+        );
+
+        // State: exact open/closed.
+        let mut closed = card(16, "done", "closed card");
+        closed.fields.state = "closed".to_owned();
+        let by_state = Filters {
+            state: Some("closed".to_owned()),
+            ..Filters::default()
+        };
+        assert!(by_state.matches(&closed), "state closed matches");
+        assert!(!by_state.matches(&card(17, "to-do", "open card")));
+
+        // Assignee: exact login, case-sensitive.
+        let mut assigned = card(18, "to-do", "assigned");
+        assigned.fields.assignee = Some("founder".to_owned());
+        let by_assignee = Filters {
+            assignee: Some("founder".to_owned()),
+            ..Filters::default()
+        };
+        assert!(by_assignee.matches(&assigned), "assignee exact login");
+        let wrong_case = Filters {
+            assignee: Some("Founder".to_owned()),
+            ..Filters::default()
+        };
+        assert!(
+            !wrong_case.matches(&assigned),
+            "assignee is an exact (case-sensitive) login match"
+        );
+
+        // AND across dimensions: one non-matching dimension excludes.
+        let and = Filters {
+            assignee: Some("founder".to_owned()),
+            milestone: Some("v1".to_owned()),
+            ..Filters::default()
+        };
+        let mut both = card(19, "to-do", "both");
+        both.fields.assignee = Some("founder".to_owned());
+        both.fields.milestone = Some("v1".to_owned());
+        assert!(
+            and.matches(&both),
+            "AND-combined filter passes when all match"
+        );
+        let mut only_assignee = card(20, "to-do", "only assignee");
+        only_assignee.fields.assignee = Some("founder".to_owned());
+        assert!(
+            !and.matches(&only_assignee),
+            "AND-combined filter excludes when one dimension mismatches"
+        );
+
+        // Empty dimensions = no filter.
+        assert!(Filters::default().matches(&non_child));
     }
 
     #[test]

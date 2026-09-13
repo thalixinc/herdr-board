@@ -6,9 +6,9 @@ use crossterm::event::{KeyCode, KeyModifiers};
 
 use herdr_board::{
     create_draft, dispatch, sync, Action, App, Candidate, CanonicalRequest, Conflict, CreateIntent,
-    CreateResult, Deps, ExternalResponse, FactoryKind, GitHubClient, HandoffResult,
-    HandoffTransport, Identity, Issue, IssueFull, IssuePatch, KeyMap, PullClient, RepoIdentity,
-    Store, UpdateResult,
+    CreateResult, Deps, ExternalResponse, FactoryKind, FilterDimension, FilterInput, GitHubClient,
+    HandoffResult, HandoffTransport, Identity, Issue, IssueFull, IssuePatch, KeyMap, PullClient,
+    RepoIdentity, Store, UpdateResult,
 };
 
 struct FakeClient {
@@ -127,66 +127,128 @@ fn issue(number: u64, title: &str, updated_at: &str) -> IssueFull {
     }
 }
 
+fn issue_with_assignee(number: u64, title: &str, assignee: &str) -> IssueFull {
+    let mut issue = issue(number, title, "r1");
+    issue.assignee = Some(assignee.to_owned());
+    issue
+}
+
 #[test]
 fn keymap_resolves_bindings() {
     let map = KeyMap;
+    // Bar closed: normal board bindings.
     assert_eq!(
-        map.resolve(KeyCode::Char('s'), KeyModifiers::NONE),
+        map.resolve(KeyCode::Char('s'), KeyModifiers::NONE, false),
         Some(Action::Sync)
     );
     assert_eq!(
-        map.resolve(KeyCode::Char('a'), KeyModifiers::NONE),
+        map.resolve(KeyCode::Char('a'), KeyModifiers::NONE, false),
         Some(Action::ApplyPull)
     );
     assert_eq!(
-        map.resolve(KeyCode::Char('d'), KeyModifiers::NONE),
+        map.resolve(KeyCode::Char('d'), KeyModifiers::NONE, false),
         Some(Action::DeferPull)
     );
     assert_eq!(
-        map.resolve(KeyCode::Char('p'), KeyModifiers::NONE),
+        map.resolve(KeyCode::Char('p'), KeyModifiers::NONE, false),
         Some(Action::Publish)
     );
     assert_eq!(
-        map.resolve(KeyCode::Char('A'), KeyModifiers::SHIFT),
+        map.resolve(KeyCode::Char('A'), KeyModifiers::SHIFT, false),
         Some(Action::ApplyPush)
     );
     assert_eq!(
-        map.resolve(KeyCode::Char('D'), KeyModifiers::SHIFT),
+        map.resolve(KeyCode::Char('D'), KeyModifiers::SHIFT, false),
         Some(Action::DiscardPush)
     );
     assert_eq!(
-        map.resolve(KeyCode::Char('f'), KeyModifiers::NONE),
+        map.resolve(KeyCode::Char('f'), KeyModifiers::NONE, false),
         Some(Action::ProcessFactory)
     );
     assert_eq!(
-        map.resolve(KeyCode::Left, KeyModifiers::NONE),
+        map.resolve(KeyCode::Left, KeyModifiers::NONE, false),
         Some(Action::MoveLeft)
     );
     assert_eq!(
-        map.resolve(KeyCode::Char('h'), KeyModifiers::NONE),
+        map.resolve(KeyCode::Char('h'), KeyModifiers::NONE, false),
         Some(Action::MoveLeft)
     );
     assert_eq!(
-        map.resolve(KeyCode::Right, KeyModifiers::NONE),
+        map.resolve(KeyCode::Right, KeyModifiers::NONE, false),
         Some(Action::MoveRight)
     );
     assert_eq!(
-        map.resolve(KeyCode::Char('l'), KeyModifiers::NONE),
+        map.resolve(KeyCode::Char('l'), KeyModifiers::NONE, false),
         Some(Action::MoveRight)
     );
     assert_eq!(
-        map.resolve(KeyCode::Char('q'), KeyModifiers::NONE),
+        map.resolve(KeyCode::Char('q'), KeyModifiers::NONE, false),
         Some(Action::Quit)
     );
     assert_eq!(
-        map.resolve(KeyCode::Esc, KeyModifiers::NONE),
+        map.resolve(KeyCode::Esc, KeyModifiers::NONE, false),
         Some(Action::Quit)
     );
     assert_eq!(
-        map.resolve(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        map.resolve(KeyCode::Char('c'), KeyModifiers::CONTROL, false),
         Some(Action::Quit)
     );
-    assert_eq!(map.resolve(KeyCode::Char('x'), KeyModifiers::NONE), None);
+    assert_eq!(
+        map.resolve(KeyCode::Char('x'), KeyModifiers::NONE, false),
+        None
+    );
+    // `/` opens the bar; it never clears filters.
+    assert_eq!(
+        map.resolve(KeyCode::Char('/'), KeyModifiers::NONE, false),
+        Some(Action::FilterOpen)
+    );
+
+    // Bar open: typing/navigation bindings take over.
+    assert_eq!(
+        map.resolve(KeyCode::Char('s'), KeyModifiers::NONE, true),
+        Some(Action::FilterChar('s')),
+        "characters type while the bar is open"
+    );
+    assert_eq!(
+        map.resolve(KeyCode::Char('x'), KeyModifiers::NONE, true),
+        Some(Action::ClearFilters),
+        "x clears all filters while the bar is open"
+    );
+    assert_eq!(
+        map.resolve(KeyCode::Enter, KeyModifiers::NONE, true),
+        Some(Action::FilterApply)
+    );
+    assert_eq!(
+        map.resolve(KeyCode::Backspace, KeyModifiers::NONE, true),
+        Some(Action::FilterBackspace)
+    );
+    assert_eq!(
+        map.resolve(KeyCode::Delete, KeyModifiers::NONE, true),
+        Some(Action::FilterClearDimension)
+    );
+    assert_eq!(
+        map.resolve(KeyCode::Tab, KeyModifiers::NONE, true),
+        Some(Action::FilterNext)
+    );
+    assert_eq!(
+        map.resolve(KeyCode::Left, KeyModifiers::NONE, true),
+        Some(Action::FilterNext),
+        "left cycles dimension while the bar is open"
+    );
+    assert_eq!(
+        map.resolve(KeyCode::Right, KeyModifiers::NONE, true),
+        Some(Action::FilterNext)
+    );
+    assert_eq!(
+        map.resolve(KeyCode::Esc, KeyModifiers::NONE, true),
+        Some(Action::FilterClose),
+        "esc closes the bar without applying"
+    );
+    assert_eq!(
+        map.resolve(KeyCode::Char('c'), KeyModifiers::CONTROL, true),
+        Some(Action::Quit),
+        "ctrl+c still quits while the bar is open"
+    );
 }
 
 #[test]
@@ -333,4 +395,107 @@ fn move_action_sets_column_without_github_write() {
     );
     assert_eq!(client.create_calls.get(), 0, "move must not write GitHub");
     assert_eq!(client.update_calls.get(), 0, "move must not write GitHub");
+}
+
+#[test]
+fn filter_input_apply_clear_and_cycle() {
+    let client = FakeClient::new(vec![
+        issue_with_assignee(1, "Founder's task", "founder"),
+        issue_with_assignee(2, "Other's task", "other"),
+    ]);
+    let transport = FakeTransport {
+        calls: Cell::new(0),
+    };
+    let repo = repo();
+    let store = Store::open_in_memory().unwrap();
+    sync(&store, &client, &repo).unwrap();
+
+    let deps = Deps {
+        pull: &client,
+        github: &client,
+        transport: &transport,
+        repo: &repo,
+    };
+    let mut app = App::new(store, repo.clone());
+    assert_eq!(app.model.len(), 2);
+
+    // `/` opens the bar on the assignee dimension.
+    dispatch(&mut app, Action::FilterOpen, &deps).unwrap();
+    assert!(app.filter_input.is_active());
+    assert!(matches!(
+        &app.filter_input,
+        FilterInput::Active {
+            dimension: FilterDimension::Assignee,
+            ..
+        }
+    ));
+
+    // Typing appends to the buffer without filtering.
+    for c in "founder".chars() {
+        dispatch(&mut app, Action::FilterChar(c), &deps).unwrap();
+    }
+    assert!(matches!(
+        &app.filter_input,
+        FilterInput::Active { buffer, .. } if buffer == "founder"
+    ));
+    assert_eq!(app.model.len(), 2, "typing does not filter yet");
+
+    // Enter applies: only the founder's card remains, reloaded.
+    dispatch(&mut app, Action::FilterApply, &deps).unwrap();
+    assert_eq!(app.filters.assignee.as_deref(), Some("founder"));
+    assert_eq!(
+        app.model.len(),
+        1,
+        "model reloaded with the assignee filter"
+    );
+
+    // `/` reopens the bar but never clears the applied filter.
+    dispatch(&mut app, Action::FilterOpen, &deps).unwrap();
+    assert_eq!(
+        app.filters.assignee.as_deref(),
+        Some("founder"),
+        "reopening the bar does not clear the filter"
+    );
+
+    // Empty-Enter clears the active dimension.
+    dispatch(&mut app, Action::FilterApply, &deps).unwrap();
+    assert_eq!(
+        app.filters.assignee, None,
+        "empty enter clears the dimension"
+    );
+    assert_eq!(app.model.len(), 2, "cleared filter shows all cards");
+
+    // `x` while the bar is open clears every filter and closes the bar.
+    dispatch(&mut app, Action::FilterOpen, &deps).unwrap();
+    for c in "founder".chars() {
+        dispatch(&mut app, Action::FilterChar(c), &deps).unwrap();
+    }
+    dispatch(&mut app, Action::FilterApply, &deps).unwrap();
+    assert_eq!(app.filters.assignee.as_deref(), Some("founder"));
+    dispatch(&mut app, Action::ClearFilters, &deps).unwrap();
+    assert_eq!(app.filters.assignee, None);
+    assert!(!app.filter_input.is_active(), "x closes the bar");
+
+    // Esc closes without applying a fresh buffer.
+    dispatch(&mut app, Action::FilterOpen, &deps).unwrap();
+    for c in "other".chars() {
+        dispatch(&mut app, Action::FilterChar(c), &deps).unwrap();
+    }
+    dispatch(&mut app, Action::FilterClose, &deps).unwrap();
+    assert!(!app.filter_input.is_active());
+    assert_eq!(
+        app.filters.assignee, None,
+        "esc closes without applying the buffer"
+    );
+
+    // Tab cycles dimension (assignee → label).
+    dispatch(&mut app, Action::FilterOpen, &deps).unwrap();
+    dispatch(&mut app, Action::FilterNext, &deps).unwrap();
+    assert!(matches!(
+        &app.filter_input,
+        FilterInput::Active {
+            dimension: FilterDimension::Label,
+            ..
+        }
+    ));
 }

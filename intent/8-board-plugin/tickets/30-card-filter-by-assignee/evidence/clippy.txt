@@ -1,0 +1,2 @@
+    Checking herdr-board v0.1.0 (/Users/chrismckenna/development/herdr-board-30)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.69s

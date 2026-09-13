@@ -40,7 +40,21 @@ pub enum Action {
     SelectNext,
     /// `k` — select the previous card.
     SelectPrev,
-    /// `/` — clear the filters.
+    /// `/` — open the filter input bar (assignee dimension first).
+    FilterOpen,
+    /// A character typed into the filter input buffer.
+    FilterChar(char),
+    /// `Enter` — apply the active dimension's buffer as a filter.
+    FilterApply,
+    /// `Backspace` — remove the last character from the filter buffer.
+    FilterBackspace,
+    /// `Tab` / `←` / `→` — cycle to the next filter dimension.
+    FilterNext,
+    /// `Delete` — clear the active dimension's filter.
+    FilterClearDimension,
+    /// `Esc` (bar open) — close the filter bar without applying.
+    FilterClose,
+    /// `x` (bar open) — clear every filter.
     ClearFilters,
     /// `q` / `esc` / `ctrl+c` — quit.
     Quit,
@@ -51,7 +65,31 @@ pub struct KeyMap;
 
 impl KeyMap {
     /// Resolve a key press (code + modifiers) to an action, if bound.
-    pub fn resolve(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
+    ///
+    /// `filter_open` selects the binding set: while the filter bar is open,
+    /// ordinary characters type into the buffer and navigation keys cycle the
+    /// dimension, so the normal board bindings are suspended.
+    pub fn resolve(
+        &self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        filter_open: bool,
+    ) -> Option<Action> {
+        if filter_open {
+            return match (modifiers, code) {
+                (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::FilterClose),
+                (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FilterApply),
+                (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::FilterBackspace),
+                (KeyModifiers::NONE, KeyCode::Delete) => Some(Action::FilterClearDimension),
+                (KeyModifiers::NONE, KeyCode::Tab) => Some(Action::FilterNext),
+                (KeyModifiers::NONE, KeyCode::Left) => Some(Action::FilterNext),
+                (KeyModifiers::NONE, KeyCode::Right) => Some(Action::FilterNext),
+                (KeyModifiers::NONE, KeyCode::Char('x')) => Some(Action::ClearFilters),
+                (KeyModifiers::CONTROL, KeyCode::Char('c')) => Some(Action::Quit),
+                (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::FilterChar(c)),
+                _ => None,
+            };
+        }
         match (modifiers, code) {
             (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::Sync),
             (KeyModifiers::NONE, KeyCode::Char('a')) => Some(Action::ApplyPull),
@@ -66,7 +104,7 @@ impl KeyMap {
             (KeyModifiers::NONE, KeyCode::Char('l')) => Some(Action::MoveRight),
             (KeyModifiers::NONE, KeyCode::Char('j')) => Some(Action::SelectNext),
             (KeyModifiers::NONE, KeyCode::Char('k')) => Some(Action::SelectPrev),
-            (KeyModifiers::NONE, KeyCode::Char('/')) => Some(Action::ClearFilters),
+            (KeyModifiers::NONE, KeyCode::Char('/')) => Some(Action::FilterOpen),
             (KeyModifiers::NONE, KeyCode::Char('q')) => Some(Action::Quit),
             (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Quit),
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => Some(Action::Quit),
@@ -253,8 +291,16 @@ where
         }
         Action::SelectNext => app.select_next(),
         Action::SelectPrev => app.select_prev(),
+        Action::FilterOpen => app.open_filter(),
+        Action::FilterChar(c) => app.push_filter_char(c),
+        Action::FilterApply => app.apply_filter(),
+        Action::FilterBackspace => app.pop_filter_char(),
+        Action::FilterNext => app.cycle_filter_dimension(),
+        Action::FilterClearDimension => app.clear_filter_dimension(),
+        Action::FilterClose => app.close_filter(),
         Action::ClearFilters => {
             app.set_filter(Filters::default());
+            app.close_filter();
             app.status = Some("filters cleared".to_owned());
         }
         Action::Quit => {}
