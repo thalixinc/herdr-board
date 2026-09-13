@@ -305,6 +305,21 @@ impl Store {
         self.get_card(identity)?.ok_or(StoreError::NotFound)
     }
 
+    /// Move a card to a board column. Board-local only: never writes GitHub,
+    /// never closes the issue, never starts work.
+    pub fn set_column(&self, identity: &Identity, column: &str) -> Result<(), StoreError> {
+        self.conn.execute(
+            "UPDATE cards SET column = ?4 WHERE owner = ?1 AND repo = ?2 AND number = ?3",
+            params![
+                identity.owner,
+                identity.repo,
+                identity.number as i64,
+                column
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Defer a conflict: keep the `apply-pending` flag (re-surfaces next sync).
     /// A no-op state-wise — re-affirms the flag only on an already-conflicted
     /// card so a non-conflicted card is never flagged.

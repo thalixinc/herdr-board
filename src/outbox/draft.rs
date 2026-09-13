@@ -29,6 +29,20 @@ impl Store {
             .ok_or_else(|| StoreError::InvalidData("draft vanished after insert".into()))
     }
 
+    /// Enumerate every draft, oldest first (the publish/process target list).
+    pub fn list_drafts(&self) -> Result<Vec<Draft>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT draft_id, factory_kind, title, body, created_at, published_at \
+             FROM drafts ORDER BY created_at ASC",
+        )?;
+        let mut rows = stmt.query(())?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push(read_draft(row)?);
+        }
+        Ok(out)
+    }
+
     /// Fetch a draft by id.
     pub(crate) fn get_draft_by_id(&self, draft_id: &str) -> Result<Option<Draft>, StoreError> {
         let mut stmt = self.conn.prepare(

@@ -14,6 +14,7 @@ pub mod outbox;
 pub mod push;
 pub mod receiver;
 pub mod sync;
+pub mod ui;
 
 pub use card::{create_draft, factory_kind_of, promote_to_factory_request, CardError, Draft};
 
@@ -42,6 +43,10 @@ pub use receiver::{
 pub use sync::{
     apply_changes, defer_changes, sync, Credentials, IssueFull, PullClient, RealGitHubClient,
     SyncError, SyncSummary, DEFAULT_COLUMN,
+};
+pub use ui::{
+    dispatch, render, run_loop, Action, App, BoardColumn, BoardModel, Deps, Filters, KeyMap,
+    ParentRef, UiError,
 };
 
 /// The plugin identity, surfaced to the herdr pane metadata.
