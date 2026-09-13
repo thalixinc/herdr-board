@@ -4,11 +4,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use herdr_board::{
-    cancel_receipt, compute, prove_actor, receive, reconfirm, startup_sweep, status_query,
-    CanonicalRequest, CfQueueContract, CfSubmission, FactoryKind, Handoff, HandoffId,
-    HandoffResult, HandoffTransport, Identity, Outcome, RealHandoffTransport, ReceiverError,
-    RequestRecord, Store, SCHEMA_VERSION, STALENESS_THRESHOLD,
+    cancel_receipt, compute, herdr_axi_send_with_bin, prove_actor, receive, reconfirm,
+    startup_sweep, status_query, AxiTarget, CanonicalRequest, CfQueueContract, CfSubmission,
+    FactoryKind, Handoff, HandoffId, HandoffResult, HandoffTransport, Identity, Outcome,
+    RealHandoffTransport, ReceiverError, RequestRecord, Store, SCHEMA_VERSION, STALENESS_THRESHOLD,
 };
+
+mod common;
 
 /// A fake transport that returns a fixed decision and counts calls.
 struct FakeTransport {
@@ -199,4 +201,92 @@ fn real_transport_maps_three_way() {
         HandoffResult::Failed(reason) => assert_eq!(reason, "timeout"),
         other => panic!("expected Failed, got {other:?}"),
     }
+}
+
+#[test]
+fn herdr_axi_submitted_maps_accepted() {
+    let dir = common::scratch_dir("transport-submitted");
+    let capture = dir.join("capture.jsonl");
+    let bin = common::fake_herdr_axi(&dir, "submitted", &capture);
+    let target = AxiTarget::new("herdr-board", "coordinator", None);
+    let contract = CfQueueContract::from_request(&request("build the board"));
+
+    match herdr_axi_send_with_bin(bin.to_str().unwrap(), &target, &contract) {
+        CfSubmission::Accepted { response } => assert_eq!(response, "submitted"),
+        other => panic!("expected Accepted, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn herdr_axi_not_submitted_maps_failed() {
+    let dir = common::scratch_dir("transport-not-submitted");
+    let capture = dir.join("capture.jsonl");
+    let bin = common::fake_herdr_axi(&dir, "not-submitted", &capture);
+    let target = AxiTarget::new("herdr-board", "coordinator", None);
+    let contract = CfQueueContract::from_request(&request("build the board"));
+
+    match herdr_axi_send_with_bin(bin.to_str().unwrap(), &target, &contract) {
+        CfSubmission::Failed { reason } => {
+            assert!(
+                reason.starts_with("not-submitted:"),
+                "reason was {reason:?}"
+            )
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn herdr_axi_unknown_maps_failed() {
+    let dir = common::scratch_dir("transport-unknown");
+    let capture = dir.join("capture.jsonl");
+    let bin = common::fake_herdr_axi(&dir, "unknown", &capture);
+    let target = AxiTarget::new("herdr-board", "coordinator", None);
+    let contract = CfQueueContract::from_request(&request("build the board"));
+
+    match herdr_axi_send_with_bin(bin.to_str().unwrap(), &target, &contract) {
+        CfSubmission::Failed { reason } => {
+            assert!(reason.starts_with("unknown:"), "reason was {reason:?}")
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn herdr_axi_body_carries_all_five_fields_verbatim() {
+    let dir = common::scratch_dir("transport-body");
+    let capture = dir.join("capture.jsonl");
+    let bin = common::fake_herdr_axi(&dir, "submitted", &capture);
+    let target = AxiTarget::new("herdr-board", "coordinator", None);
+    let req = request("payload\nwith newline");
+    let contract = CfQueueContract::from_request(&req);
+
+    let _ = herdr_axi_send_with_bin(bin.to_str().unwrap(), &target, &contract);
+
+    let envelopes = common::captured_envelopes(&capture);
+    assert_eq!(envelopes.len(), 1, "one dispatch → one envelope");
+
+    let text = envelopes[0]["params"]["text"]
+        .as_str()
+        .expect("params.text is a string");
+    let body: serde_json::Value =
+        serde_json::from_str(text).expect("body is the serialized contract");
+
+    // All five fields, verbatim (identity canonicalized by `from_request`).
+    assert_eq!(body["identity"], contract.identity);
+    assert_eq!(body["revision"], contract.revision);
+    assert_eq!(body["factory"], contract.factory);
+    assert_eq!(body["actor"], contract.actor);
+    assert_eq!(body["body"], contract.body);
+
+    // A stable idempotency key travels with the envelope.
+    assert!(envelopes[0]["params"]["message_id"].as_str().is_some());
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

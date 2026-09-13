@@ -35,10 +35,10 @@ pub use outbox::{
 };
 pub use push::{apply_push, discard_push, publish_draft, push_changes, PushError};
 pub use receiver::{
-    cancel_receipt, prove_actor, receive, reconfirm, replay, startup_sweep, status_query, Actor,
-    ActorSource, CfQueueContract, CfSubmission, ExternalResponse, Handoff, HandoffResult,
-    HandoffTransport, RealHandoffTransport, Receiver, ReceiverError, TrustRoot,
-    STALENESS_THRESHOLD,
+    cancel_receipt, herdr_axi_send, herdr_axi_send_with_bin, prove_actor, receive, reconfirm,
+    replay, startup_sweep, status_query, Actor, ActorSource, AxiTarget, CfQueueContract,
+    CfSubmission, ExternalResponse, Handoff, HandoffResult, HandoffTransport, RealHandoffTransport,
+    Receiver, ReceiverError, TrustRoot, DEFAULT_FACTORY, HERDR_AXI_BIN, STALENESS_THRESHOLD,
 };
 pub use sync::{
     apply_changes, defer_changes, sync, Credentials, IssueFull, PullClient, RealGitHubClient,

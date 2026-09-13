@@ -12,7 +12,10 @@ pub use handoff::{ExternalResponse, Handoff, HandoffResult, HandoffTransport};
 pub use reconcile::{
     cancel_receipt, reconfirm, replay, startup_sweep, status_query, STALENESS_THRESHOLD,
 };
-pub use transport::{CfQueueContract, CfSubmission, RealHandoffTransport};
+pub use transport::{
+    herdr_axi_send, herdr_axi_send_with_bin, AxiTarget, CfQueueContract, CfSubmission,
+    RealHandoffTransport, DEFAULT_FACTORY, HERDR_AXI_BIN,
+};
 
 use std::fmt;
 
