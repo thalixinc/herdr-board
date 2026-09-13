@@ -1,284 +1,315 @@
-//! Receiver lifecycle: clean handoff, idempotent re-delivery, in-flight dedup,
-//! forged-actor refusal, drift refusal, restart persistence, and convergence.
+//! Integration: the full receiver lifecycle against a fake transport.
+//!
+//! Pins the receiver's core guarantees: clean dispatch, idempotent
+//! re-delivery, in-flight dedup, actor provenance, drift refusal, crash
+//! recovery (write-ahead), and the single-active-attempt invariant.
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Barrier};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
-use herdr_board::digest::{compute, CanonicalRequest, Identity};
-use herdr_board::outbox::{HandoffId, Outcome, RequestRecord, Store};
-use herdr_board::receiver::{
-    receive, startup_sweep, ExternalResponse, Handoff, HandoffResult, HandoffTransport,
-    ReceiverError,
+use herdr_board::{
+    compute, prove_actor, receive, reconfirm, replay, startup_sweep, status_query,
+    CanonicalRequest, ExternalResponse, FactoryKind, Field, Handoff, HandoffId, HandoffResult,
+    HandoffTransport, Identity, Outcome, ReceiverError, RequestRecord, Store, SCHEMA_VERSION,
+    STALENESS_THRESHOLD,
 };
 
-static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-const WORKSPACE: &str = "test-workspace";
-
-fn set_test_workspace() {
-    std::env::set_var("HERDR_WORKSPACE_ID", WORKSPACE);
+/// A fake transport that returns a fixed decision and counts calls.
+struct FakeTransport {
+    calls: Arc<AtomicUsize>,
+    decision: Decision,
 }
 
-/// A unique temp directory, removed on drop.
-struct TestDir(PathBuf);
-
-impl TestDir {
-    fn new() -> Self {
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "herdr-board-receiver-{}-{nanos}-{n}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        TestDir(dir)
-    }
-
-    fn file(&self) -> PathBuf {
-        self.0.join("db.sqlite3")
-    }
+enum Decision {
+    Accept,
+    Refuse,
+    Fail,
 }
 
-impl Drop for TestDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+impl HandoffTransport for FakeTransport {
+    fn handoff(&self, _request: &CanonicalRequest) -> HandoffResult {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        match &self.decision {
+            Decision::Accept => HandoffResult::Accepted(ExternalResponse::new("ok: scheduled")),
+            Decision::Refuse => HandoffResult::Refused(ExternalResponse::new("no: quota")),
+            Decision::Fail => HandoffResult::Failed("coordinator unreachable".to_owned()),
+        }
     }
 }
 
 fn request(body: &str) -> CanonicalRequest {
+    let actor = prove_actor();
     CanonicalRequest {
-        identity: Identity::new("thalixinc", "herdr-board", 42),
-        revision: "r1".to_string(),
-        factory: "coordinator".to_string(),
-        actor: WORKSPACE.to_string(),
-        body: body.to_string(),
+        factory_kind: FactoryKind::FactoryRequest,
+        identity: Identity::new("ThalixInc", "herdr-board", 42),
+        revision: "2026-09-12T00:00:00Z".into(),
+        factory: "coordinator".into(),
+        actor: actor.value,
+        body: body.to_owned(),
     }
 }
 
-fn record_from(req: &CanonicalRequest) -> RequestRecord {
-    RequestRecord {
-        digest: compute(req),
-        identity: req.identity.canonical(),
-        revision: req.revision.clone(),
-        factory: req.factory.clone(),
-        actor: req.actor.clone(),
-        actor_source: "herdr-workspace-identity".to_string(),
-        body: req.body.clone(),
-    }
-}
-
-fn handoff(id: HandoffId, body: &str) -> Handoff {
+fn handoff(request: CanonicalRequest) -> Handoff {
     Handoff {
-        handoff_id: id,
-        request: request(body),
+        handoff_id: HandoffId::new_v4(),
+        request,
     }
 }
 
-struct FakeTransport {
-    accepted: bool,
+fn accepting() -> FakeTransport {
+    FakeTransport {
+        calls: Arc::new(AtomicUsize::new(0)),
+        decision: Decision::Accept,
+    }
 }
 
-impl HandoffTransport for FakeTransport {
-    fn handoff(&self, _handoff: &Handoff) -> HandoffResult {
-        HandoffResult {
-            accepted: self.accepted,
-            response: ExternalResponse(if self.accepted {
-                "ack-ok".to_string()
-            } else {
-                "nack".to_string()
-            }),
-        }
+fn failing() -> FakeTransport {
+    FakeTransport {
+        calls: Arc::new(AtomicUsize::new(0)),
+        decision: Decision::Fail,
     }
+}
+
+fn temp_dir() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "herdr-board-receiver-test-{}-{}",
+        std::process::id(),
+        HandoffId::new_v4()
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    dir
 }
 
 #[test]
-fn clean_path_returns_accepted_receipt() {
-    set_test_workspace();
-    let store = Store::open_in_memory().expect("open store");
-    let transport = FakeTransport { accepted: true };
-    let h = HandoffId::new_v4();
-
-    let receipt = receive(&store, &handoff(h, "body-1"), &transport).expect("receive ok");
-
-    assert_eq!(receipt.handoff_id, h);
+fn clean_path_accepts() {
+    let store = Store::open_in_memory().unwrap();
+    let transport = accepting();
+    let receipt = receive(&store, &handoff(request("build the board")), &transport).unwrap();
     assert_eq!(receipt.outcome, Outcome::Accepted);
-    assert_eq!(receipt.external_response.as_deref(), Some("ack-ok"));
-    assert!(receipt.finalized_at.is_some());
-    assert_eq!(receipt.actor, WORKSPACE);
-    assert_eq!(receipt.actor_source, "herdr-workspace-identity");
+    assert_eq!(receipt.external_response.as_deref(), Some("ok: scheduled"));
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn coordinator_refusal_is_a_terminal_receipt() {
+    let store = Store::open_in_memory().unwrap();
+    let transport = FakeTransport {
+        calls: Arc::new(AtomicUsize::new(0)),
+        decision: Decision::Refuse,
+    };
+    let receipt = receive(&store, &handoff(request("build the board")), &transport).unwrap();
+    assert_eq!(receipt.outcome, Outcome::Refused);
+    assert_eq!(receipt.external_response.as_deref(), Some("no: quota"));
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
 fn idempotent_redelivery_returns_same_receipt() {
-    set_test_workspace();
-    let store = Store::open_in_memory().expect("open store");
-    let transport = FakeTransport { accepted: true };
-    let h = HandoffId::new_v4();
+    let store = Store::open_in_memory().unwrap();
+    let transport = accepting();
+    let handoff = handoff(request("build the board"));
 
-    let first = receive(&store, &handoff(h, "body-1"), &transport).expect("first receive");
-    let second = receive(&store, &handoff(h, "body-1"), &transport).expect("re-delivery");
+    let first = receive(&store, &handoff, &transport).unwrap();
+    let second = receive(&store, &handoff, &transport).unwrap();
 
     assert_eq!(first.receipt_id, second.receipt_id);
     assert_eq!(second.outcome, Outcome::Accepted);
+    // The transport ran exactly once — the re-delivery did not re-dispatch.
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
 fn inflight_dedup_returns_active_receipt() {
-    set_test_workspace();
-    let store = Store::open_in_memory().expect("open store");
-    let transport = FakeTransport { accepted: true };
+    let store = Store::open_in_memory().unwrap();
+    let transport = failing();
+    let req = request("build the board");
 
-    // Prime an in-flight (handed-off) request directly on the store.
-    let req = request("body-1");
-    let record = record_from(&req);
-    let h1 = HandoffId::new_v4();
-    let r1 = store
-        .insert_pending(&record, &h1)
-        .expect("insert in-flight");
-    store
-        .transition_to(&r1.receipt_id, Outcome::HandedOff, None)
-        .expect("mark handed-off");
+    // First attempt: transport fails, so the receipt stays handed-off (active).
+    let err = receive(&store, &handoff(req.clone()), &transport).unwrap_err();
+    assert!(matches!(err, ReceiverError::Transport(_)));
 
-    // A new handoff id with the same input converges on the active receipt.
-    let h2 = HandoffId::new_v4();
-    let result = receive(&store, &handoff(h2, "body-1"), &transport).expect("receive ok");
+    let active = store.get_active_by_digest(&compute(&req)).unwrap().unwrap();
+    assert_eq!(active.outcome, Outcome::HandedOff);
 
-    assert_eq!(result.receipt_id, r1.receipt_id);
-    assert_eq!(result.handoff_id, h1);
-    assert_eq!(result.outcome, Outcome::HandedOff);
-}
-
-#[test]
-fn forged_actor_is_refused() {
-    set_test_workspace();
-    let store = Store::open_in_memory().expect("open store");
-    let transport = FakeTransport { accepted: true };
-
-    let mut req = request("body-1");
-    req.actor = "forged-actor".to_string();
-    let h = HandoffId::new_v4();
-    let forged = Handoff {
-        handoff_id: h,
-        request: req,
-    };
-
-    let err = receive(&store, &forged, &transport).expect_err("must refuse");
-    assert!(matches!(err, ReceiverError::ActorMismatch));
-
-    // Nothing was persisted.
-    assert_eq!(store.list_non_terminal().expect("list").len(), 0);
-}
-
-#[test]
-fn drifted_body_is_refused() {
-    set_test_workspace();
-    let store = Store::open_in_memory().expect("open store");
-    let transport = FakeTransport { accepted: true };
-
-    // Persist body-1 in-flight, then re-deliver the same handoff id drifted to
-    // body-2: the digest no longer matches → refusal with a mismatch.
-    let req = request("body-1");
-    let record = record_from(&req);
-    let h = HandoffId::new_v4();
-    let r1 = store.insert_pending(&record, &h).expect("insert in-flight");
-    store
-        .transition_to(&r1.receipt_id, Outcome::HandedOff, None)
-        .expect("mark handed-off");
-
-    let result = receive(&store, &handoff(h, "body-2"), &transport);
-    match result {
-        Err(ReceiverError::Refusal(mismatch)) => {
-            // The drift is real: the stored digest id differs from the
-            // presented one.
-            assert_ne!(mismatch.stored_id, mismatch.presented_id);
+    // Same input, new handoff id → in-flight dedup returns the active receipt.
+    let err = receive(&store, &handoff(req), &transport).unwrap_err();
+    match err {
+        ReceiverError::ActiveAttemptExists { receipt } => {
+            assert_eq!(receipt.receipt_id, active.receipt_id);
         }
-        other => panic!("expected Refusal, got {other:?}"),
+        other => panic!("expected ActiveAttemptExists, got {other:?}"),
     }
 }
 
 #[test]
-fn handed_off_persists_and_sweeps_across_reopen() {
-    set_test_workspace();
-    let dir = TestDir::new();
-    let path = dir.file();
+fn forged_actor_is_refused() {
+    let store = Store::open_in_memory().unwrap();
+    let transport = accepting();
+    let mut req = request("build the board");
+    let forged = format!("{}!forged", prove_actor().value);
+    req.actor = forged.clone();
 
-    let (h, receipt_id);
-    {
-        let store = Store::open(&path).expect("open store");
-        let req = request("body-1");
-        let record = record_from(&req);
-        h = HandoffId::new_v4();
-        let r = store.insert_pending(&record, &h).expect("insert");
-        store
-            .transition_to(&r.receipt_id, Outcome::HandedOff, None)
-            .expect("mark handed-off");
-        receipt_id = r.receipt_id;
-    } // drop closes the connection
-
-    let store = Store::open(&path).expect("reopen store");
-    let swept = startup_sweep(&store).expect("sweep");
-    assert_eq!(swept.len(), 1);
-    assert_eq!(swept[0].receipt_id, receipt_id);
-    assert_eq!(swept[0].handoff_id, h);
-    assert_eq!(swept[0].outcome, Outcome::HandedOff);
+    let err = receive(&store, &handoff(req), &transport).unwrap_err();
+    match err {
+        ReceiverError::ActorMismatch { claimed, .. } => assert_eq!(claimed, forged),
+        other => panic!("expected ActorMismatch, got {other:?}"),
+    }
+    // Nothing was dispatched.
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
 }
 
 #[test]
-fn two_racing_attempts_converge_on_one_active() {
-    set_test_workspace();
-    let dir = TestDir::new();
-    let path = dir.file();
+fn drifted_body_is_refused_with_mismatch() {
+    let store = Store::open_in_memory().unwrap();
+    let transport = accepting();
+    let original = request("build the board");
 
-    // Prime WAL mode on the file before racing (avoids concurrent PRAGMA
-    // journal_mode writes).
-    drop(Store::open(&path).expect("prime store"));
+    // Clean dispatch → accepted.
+    let first = receive(&store, &handoff(original.clone()), &transport).unwrap();
+    assert_eq!(first.outcome, Outcome::Accepted);
 
-    let req = request("body-1");
-    let barrier = Arc::new(Barrier::new(2));
+    // Re-deliver the SAME handoff id with a drifted body.
+    let mut drifted = original;
+    drifted.body = "build the board (edited)".to_owned();
+    let re = Handoff {
+        handoff_id: first.handoff_id,
+        request: drifted,
+    };
+    let err = receive(&store, &re, &transport).unwrap_err();
+    match err {
+        ReceiverError::Refusal(mismatch) => {
+            assert_eq!(mismatch.field_diffs.len(), 1);
+            let diff = &mismatch.field_diffs[0];
+            assert_eq!(diff.field, Field::Body);
+            assert_eq!(diff.old, "build the board");
+            assert_eq!(diff.new, "build the board (edited)");
+            assert_ne!(mismatch.stored_id, mismatch.presented_id);
+        }
+        other => panic!("expected Refusal(Mismatch), got {other:?}"),
+    }
 
-    let path_a = path.clone();
-    let req_a = req.clone();
-    let barrier_a = Arc::clone(&barrier);
-    let a = std::thread::spawn(move || {
-        let store = Store::open(&path_a).expect("open store a");
-        let transport = FakeTransport { accepted: true };
-        let handoff = Handoff {
-            handoff_id: HandoffId::new_v4(),
-            request: req_a,
-        };
-        barrier_a.wait();
-        receive(&store, &handoff, &transport)
-    });
+    // The original receipt is untouched (never rewritten after a failed verify).
+    let stored = store.get_by_handoff_id(&first.handoff_id).unwrap().unwrap();
+    assert_eq!(stored.receipt_id, first.receipt_id);
+    assert_eq!(stored.outcome, Outcome::Accepted);
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+}
 
-    let path_b = path.clone();
-    let req_b = req.clone();
-    let barrier_b = Arc::clone(&barrier);
-    let b = std::thread::spawn(move || {
-        let store = Store::open(&path_b).expect("open store b");
-        let transport = FakeTransport { accepted: true };
-        let handoff = Handoff {
-            handoff_id: HandoffId::new_v4(),
-            request: req_b,
-        };
-        barrier_b.wait();
-        receive(&store, &handoff, &transport)
-    });
+#[test]
+fn handed_off_persists_across_reopen_and_sweep_surfaces_it() {
+    let dir = temp_dir();
+    let path = dir.join("herdr-board.sqlite3");
+    let transport = failing();
+    let req = request("build the board");
+    let handoff_id;
 
-    let ra = a.join().expect("thread a did not panic");
-    let rb = b.join().expect("thread b did not panic");
+    {
+        let store = Store::open(&path).unwrap();
+        let h = handoff(req.clone());
+        handoff_id = h.handoff_id;
+        // Transport fails: receipt stays handed-off. Dropping `store` here
+        // simulates a crash between the `handed-off` commit and finalize.
+        let err = receive(&store, &h, &transport).unwrap_err();
+        assert!(matches!(err, ReceiverError::Transport(_)));
+    }
 
-    // At least one attempt succeeds end to end.
-    assert!(
-        ra.is_ok() || rb.is_ok(),
-        "at least one racing attempt succeeds: {ra:?} / {rb:?}"
-    );
+    // Reopen: the handed-off receipt persisted.
+    let store = Store::open(&path).unwrap();
+    let receipt = store.get_by_handoff_id(&handoff_id).unwrap().unwrap();
+    assert_eq!(receipt.outcome, Outcome::HandedOff);
 
-    // At most one active (non-terminal) receipt survives.
-    let store = Store::open(&path).expect("reopen store");
-    let active = store.list_non_terminal().expect("list non-terminal");
-    assert!(active.len() <= 1, "at most one active attempt: {active:?}");
+    // Sweep with "now" past the staleness threshold surfaces it.
+    let now = receipt.created_at + STALENESS_THRESHOLD.as_secs() as i64 + 1;
+    let stale = startup_sweep(&store, now).unwrap();
+    assert_eq!(stale.len(), 1);
+    assert_eq!(stale[0].receipt_id, receipt.receipt_id);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn two_racing_receives_yield_one_active_receipt() {
+    let store = Store::open_in_memory().unwrap();
+    let transport = failing();
+    let req = request("build the board");
+
+    // Simulate a racing writer that already acquired the active-attempt slot.
+    let record = RequestRecord {
+        schema_version: SCHEMA_VERSION,
+        factory_kind: req.factory_kind,
+        digest: compute(&req),
+        identity: req.identity.canonical(),
+        revision: req.revision.clone(),
+        factory: req.factory.clone(),
+        actor: req.actor.clone(),
+        actor_source: "os-user".to_owned(),
+        body: req.body.clone(),
+    };
+    let existing = store.insert_pending(&record, &HandoffId::new_v4()).unwrap();
+
+    // A concurrent receive of the same input must not create a second attempt.
+    let err = receive(&store, &handoff(req), &transport).unwrap_err();
+    match err {
+        ReceiverError::ActiveAttemptExists { receipt } => {
+            assert_eq!(receipt.receipt_id, existing.receipt_id);
+        }
+        other => panic!("expected ActiveAttemptExists, got {other:?}"),
+    }
+
+    // Exactly one non-terminal receipt exists.
+    let active = store.list_non_terminal().unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].receipt_id, existing.receipt_id);
+}
+
+#[test]
+fn reconfirm_redispatches_handed_off_receipt() {
+    let store = Store::open_in_memory().unwrap();
+    let fail = failing();
+    let accept = accepting();
+    let req = request("build the board");
+    let h = handoff(req.clone());
+
+    let err = receive(&store, &h, &fail).unwrap_err();
+    assert!(matches!(err, ReceiverError::Transport(_)));
+    let handed_off = store.get_by_handoff_id(&h.handoff_id).unwrap().unwrap();
+    assert_eq!(handed_off.outcome, Outcome::HandedOff);
+
+    // Re-confirm with a healthy transport: same receipt, now accepted.
+    let reaccepted = reconfirm(&store, &handed_off, &accept).unwrap();
+    assert_eq!(reaccepted.receipt_id, handed_off.receipt_id);
+    assert_eq!(reaccepted.outcome, Outcome::Accepted);
+    assert_eq!(accept.calls.load(Ordering::SeqCst), 1);
+
+    // Re-confirming again is refused: terminal outcomes are final.
+    assert!(matches!(
+        reconfirm(&store, &reaccepted, &accept),
+        Err(ReceiverError::Store(_))
+    ));
+}
+
+#[test]
+fn status_query_records_answer_and_replay_is_noop() {
+    let store = Store::open_in_memory().unwrap();
+    let fail = failing();
+    let req = request("build the board");
+    let h = handoff(req.clone());
+
+    let _ = receive(&store, &h, &fail).unwrap_err();
+    let handed_off = store.get_by_handoff_id(&h.handoff_id).unwrap().unwrap();
+
+    // Record an out-of-band external answer (accepted).
+    let answered = status_query(
+        &store,
+        &handed_off,
+        true,
+        &ExternalResponse::new("ok: acked"),
+    )
+    .unwrap();
+    assert_eq!(answered.outcome, Outcome::Accepted);
+    assert_eq!(answered.external_response.as_deref(), Some("ok: acked"));
+
+    // Replay: idempotent no-op — returns the receipt unchanged.
+    let replayed = replay(&store, &answered).unwrap();
+    assert_eq!(replayed, answered);
 }

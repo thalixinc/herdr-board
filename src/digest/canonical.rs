@@ -1,6 +1,6 @@
 //! Canonical identity, request shape, and length-prefix framing.
 
-use super::SCHEMA_VERSION;
+use crate::kind::FactoryKind;
 
 /// The stable identity of an issue: `owner/repo#number`.
 ///
@@ -35,11 +35,14 @@ impl Identity {
     }
 }
 
-/// The five canonical fields of a factory request, in the fixed order used for
+/// The six canonical fields of a factory request, in the fixed order used for
 /// framing. Field order is part of the digest contract: a reorder is a schema
 /// bump.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CanonicalRequest {
+    /// The card's factory-kind discriminator — the first data field (a
+    /// discriminator reads first).
+    pub factory_kind: FactoryKind,
     pub identity: Identity,
     pub revision: String,
     pub factory: String,
@@ -48,30 +51,38 @@ pub struct CanonicalRequest {
 }
 
 impl CanonicalRequest {
-    /// The framed byte string hashed by [`compute`](super::compute).
-    pub(crate) fn framed_bytes(&self) -> Vec<u8> {
-        Self::framed_bytes_with_version(self, SCHEMA_VERSION)
-    }
-
-    /// Framing with an explicit version. Exists so tests can prove the version
-    /// is inside the hash without mutating the crate-wide constant.
+    /// Framing with an explicit version. The version selects the field layout:
+    /// v1 predates `factory_kind` in the digest (five data fields); v2 inserts
+    /// it as the first data field.
     pub(crate) fn framed_bytes_with_version(&self, version: u64) -> Vec<u8> {
         let version_ascii = version.to_string();
         let identity = self.identity.canonical();
 
-        let fields: [&[u8]; 6] = [
-            version_ascii.as_bytes(),
-            identity.as_bytes(),
-            self.revision.as_bytes(),
-            self.factory.as_bytes(),
-            self.actor.as_bytes(),
-            self.body.as_bytes(),
-        ];
+        let frames: Vec<&[u8]> = if version <= 1 {
+            vec![
+                version_ascii.as_bytes(),
+                identity.as_bytes(),
+                self.revision.as_bytes(),
+                self.factory.as_bytes(),
+                self.actor.as_bytes(),
+                self.body.as_bytes(),
+            ]
+        } else {
+            vec![
+                version_ascii.as_bytes(),
+                self.factory_kind.as_str().as_bytes(),
+                identity.as_bytes(),
+                self.revision.as_bytes(),
+                self.factory.as_bytes(),
+                self.actor.as_bytes(),
+                self.body.as_bytes(),
+            ]
+        };
 
         // Single allocation: framing is O(total bytes), never quadratic.
-        let capacity: usize = fields.iter().map(|f| 8 + f.len()).sum();
+        let capacity: usize = frames.iter().map(|f| 8 + f.len()).sum();
         let mut out = Vec::with_capacity(capacity);
-        for field in fields {
+        for field in frames {
             out.extend_from_slice(&(field.len() as u64).to_be_bytes());
             out.extend_from_slice(field);
         }
@@ -82,6 +93,7 @@ impl CanonicalRequest {
 #[cfg(test)]
 mod tests {
     use super::{CanonicalRequest, Identity};
+    use crate::kind::FactoryKind;
 
     /// Encode a single frame as `[length: u64 big-endian][raw bytes]` — the
     /// same framing the production path applies to each field.
@@ -94,6 +106,7 @@ mod tests {
 
     fn request() -> CanonicalRequest {
         CanonicalRequest {
+            factory_kind: FactoryKind::FactoryRequest,
             identity: Identity::new("ThalixInc", "herdr-board", 42),
             revision: "r1".into(),
             factory: "coordinator".into(),

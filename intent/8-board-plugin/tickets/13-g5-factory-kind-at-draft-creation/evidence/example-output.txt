@@ -1,0 +1,6 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running `target/debug/examples/factory_kind_demo`
+draft 995f416c-a573-4704-88f8-975c9cb40b06 ordinary
+draft e57b9b50-b4f8-4338-a793-2b8882cc6dcb factory-request
+request factory-kind: factory-request, digest id: 041348931b6f38ff
+re-promote refused: draft is already a factory request

@@ -1,0 +1,5 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running `target/debug/examples/create_link_demo`
+issue: create outcome unknown: network drop
+intent 7f193980-6b2f-4f12-abfc-88495beb23d6 outcome issued
+linked issue 1234
