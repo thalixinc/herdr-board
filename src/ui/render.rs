@@ -1,152 +1,316 @@
-//! Board rendering: column layout, card badges/chips, the focused conflict
-//! diff, the filter bar, and the status line. Pure over [`App`] — no store
-//! access, no sync/push/factory logic.
+//! Board rendering: a kanban of bordered columns, each holding bordered
+//! cards with a left color accent, state badge, label chips, and assignee.
+//! Pure over [`App`] — no store access, no sync/push/factory logic.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::outbox::Conflict;
+use crate::outbox::{Card, Conflict};
 
 use super::app::App;
-use super::model::{Entry, Filters};
+use super::model::{BoardColumn, Entry};
 
-/// Render the whole board into `frame`.
+/// Left-accent + badge colors, keyed to card state (open/closed/conflict) and
+/// factory intent.
+const ACCENT_OPEN: Color = Color::Green;
+const ACCENT_CLOSED: Color = Color::DarkGray;
+const ACCENT_CONFLICT: Color = Color::Red;
+const ACCENT_FACTORY: Color = Color::Cyan;
+const BORDER: Color = Color::DarkGray;
+const FOCUSED: Color = Color::Yellow;
+const HEADER: Color = Color::Cyan;
+
+/// The header row: board mark, name, running indicator, and repo scope.
+const CMD_BAR: &str = "[ s Sync ]  [ ←→ Move ]  [ f Factory ]  [ a Apply ]  [ q Quit ]";
+
+/// The left-accent color for a card.
+fn accent(card: &Card) -> Color {
+    if card.conflict == Conflict::ApplyPending {
+        ACCENT_CONFLICT
+    } else if card.factory_kind.is_factory_request() {
+        ACCENT_FACTORY
+    } else if card.fields.state == "closed" {
+        ACCENT_CLOSED
+    } else {
+        ACCENT_OPEN
+    }
+}
+
+/// The human state badge: `• open`, `✓ closed[:reason]`, or `✗ changed`.
+fn state_badge(card: &Card) -> String {
+    if card.conflict == Conflict::ApplyPending {
+        return "✗ changed".to_owned();
+    }
+    match card.fields.state.as_str() {
+        "closed" => match &card.fields.state_reason {
+            Some(reason) => format!("✓ closed:{reason}"),
+            None => "✓ closed".to_owned(),
+        },
+        _ => "• open".to_owned(),
+    }
+}
+
+/// Truncate to `max` chars with a trailing ellipsis.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_owned()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
+/// Render the whole board.
 pub fn render(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // title
+            Constraint::Length(1), // header
+            Constraint::Length(1), // toolbar
             Constraint::Min(1),    // columns
-            Constraint::Length(1), // filter bar
-            Constraint::Length(1), // status line
+            Constraint::Length(1), // command bar
         ])
         .split(area);
 
-    let title = format!("herdr-board — {}/{}", app.repo.owner, app.repo.repo);
-    frame.render_widget(
-        Paragraph::new(Span::styled(title, crate::ui::TITLE_STYLE)),
-        vertical[0],
-    );
-
-    if app.model.columns.is_empty() {
-        frame.render_widget(Paragraph::new("(empty board)"), vertical[1]);
-    } else {
-        let count = app.model.columns.len() as u32;
-        let widths: Vec<Constraint> = (0..count).map(|_| Constraint::Ratio(1, count)).collect();
-        let column_areas = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(widths)
-            .split(vertical[1]);
-        for (i, column) in app.model.columns.iter().enumerate() {
-            render_column(frame, column_areas[i], column, app);
-        }
-    }
-
-    frame.render_widget(
-        Paragraph::new(Span::raw(filter_bar_text(&app.filters))),
-        vertical[2],
-    );
-
-    let status = app.status.as_deref().unwrap_or("ready");
-    frame.render_widget(Paragraph::new(Span::raw(status)), vertical[3]);
+    render_header(frame, vertical[0], app);
+    render_toolbar(frame, vertical[1], app);
+    render_columns(frame, vertical[2], app);
+    render_command_bar(frame, vertical[3]);
 }
 
-fn render_column(frame: &mut Frame<'_>, area: Rect, column: &super::model::BoardColumn, app: &App) {
+fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let line = Line::from(vec![
+        Span::styled("◆ ", Style::new().fg(HEADER).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "herdr-board",
+            Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled("● running", Style::new().fg(Color::Green)),
+        Span::raw("   "),
+        Span::styled(
+            format!("{}/{}", app.repo.owner, app.repo.repo),
+            Style::new().fg(Color::DarkGray),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn render_toolbar(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let mut spans: Vec<Span<'_>> = Vec::new();
+    let tabs: [(&str, Option<&str>); 3] = [
+        (" All ", None),
+        (" Open ", Some("open")),
+        (" Closed ", Some("closed")),
+    ];
+    for (label, state) in tabs {
+        let active = app.filters.state.as_deref() == state;
+        let style = if active {
+            Style::new().fg(Color::Black).bg(Color::Green)
+        } else {
+            Style::new().fg(Color::DarkGray)
+        };
+        spans.push(Span::styled(format!("[{label}]"), style));
+        spans.push(Span::raw(" "));
+    }
+
+    // Any non-state filters still active, shown as trailing chips.
+    for label in &app.filters.labels {
+        spans.push(Span::styled(
+            format!("[label:{label}]"),
+            Style::new().fg(Color::Magenta),
+        ));
+        spans.push(Span::raw(" "));
+    }
+    if let Some(assignee) = &app.filters.assignee {
+        spans.push(Span::styled(
+            format!("[@{assignee}]"),
+            Style::new().fg(Color::Magenta),
+        ));
+        spans.push(Span::raw(" "));
+    }
+    if let Some(title) = &app.filters.title {
+        spans.push(Span::styled(
+            format!("[“{title}”]"),
+            Style::new().fg(Color::Magenta),
+        ));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn render_columns(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    if app.model.columns.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "(empty board)",
+                Style::new().fg(Color::DarkGray),
+            )),
+            area,
+        );
+        return;
+    }
+
+    let count = app.model.columns.len() as u32;
+    let widths: Vec<Constraint> = (0..count).map(|_| Constraint::Ratio(1, count)).collect();
+    let column_areas = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(widths)
+        .split(area);
+    for (i, column) in app.model.columns.iter().enumerate() {
+        render_column(frame, column_areas[i], column, app);
+    }
+}
+
+/// The column header: uppercase name + card count.
+fn column_header(column: &BoardColumn) -> String {
+    format!(
+        "{} · {}",
+        column.name.to_ascii_uppercase(),
+        column.entries.len()
+    )
+}
+
+fn render_column(frame: &mut Frame<'_>, area: Rect, column: &BoardColumn, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(column.name.as_str());
+        .title(column_header(column))
+        .title_style(Style::new().fg(Color::White).add_modifier(Modifier::BOLD))
+        .border_style(Style::new().fg(BORDER));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let focused = app.focused();
-    let mut lines: Vec<Line<'_>> = Vec::new();
+    let mut y: u16 = 0;
     for entry in &column.entries {
         let card = entry.card();
-        lines.push(Line::from(Span::raw(card_line(entry))));
-
         let is_focused = focused.is_some_and(|f| f.identity == card.identity);
-        if is_focused && card.conflict == Conflict::ApplyPending {
-            lines.push(Line::from(Span::styled(
-                "issue changed; apply?",
-                crate::ui::CONFLICT_STYLE,
-            )));
-            if let Some(diffs) = app.conflicts.get(&card.identity) {
-                for diff in diffs {
-                    lines.push(Line::from(Span::raw(format!(
-                        "  {}: {} → {}",
-                        diff.field.as_str(),
-                        diff.old,
-                        diff.new
-                    ))));
-                }
-            }
+        let diff_rows = if is_focused && card.conflict == Conflict::ApplyPending {
+            app.conflicts
+                .get(&card.identity)
+                .map(|d| d.len())
+                .unwrap_or(0) as u16
+                + 1
+        } else {
+            0
+        };
+        let height = 4 + diff_rows;
+        if y + height > inner.height {
+            break;
         }
+        let slot = Rect::new(inner.x, inner.y + y, inner.width, height);
+        render_card(frame, slot, entry, app, is_focused, diff_rows);
+        y += height;
     }
-    frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// The single-line rendering of one card entry (badges and chips, no diff).
-fn card_line(entry: &Entry) -> String {
+fn render_card(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    entry: &Entry,
+    app: &App,
+    is_focused: bool,
+    diff_rows: u16,
+) {
     let card = entry.card();
+    let accent = accent(card);
+    let border = if is_focused { FOCUSED } else { BORDER };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(border));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let width = inner.width as usize;
     let indent = if entry.is_indented() { "  " } else { "" };
     let marker = if matches!(entry, Entry::Epic(_)) {
         "▸ "
     } else {
         ""
     };
-
-    let mut line = format!(
-        "{indent}{marker}#{} {}",
-        card.identity.number, card.fields.title
+    let title = truncate(
+        &format!(
+            "{indent}{marker}#{} {}",
+            card.identity.number, card.fields.title
+        ),
+        width.saturating_sub(2),
     );
-    line.push_str(&format!(" [{}]", state_badge(card)));
+
+    let mut badges: Vec<String> = vec![state_badge(card)];
     for label in &card.fields.labels {
-        line.push_str(&format!(" [{}]", label));
+        badges.push(format!("[{label}]"));
     }
     if let Some(assignee) = &card.fields.assignee {
-        line.push_str(&format!(" @{}", assignee));
+        badges.push(format!("@{assignee}"));
     }
     if let Some(milestone) = &card.fields.milestone {
-        line.push_str(&format!(" m:{}", milestone));
+        badges.push(format!("m:{milestone}"));
     }
     if card.factory_kind.is_factory_request() {
-        line.push_str(" ⚙");
+        badges.push("⚙".to_owned());
     }
-    if card.conflict == Conflict::ApplyPending {
-        line.push_str(" ✗");
+    let badge_text = truncate(&badges.join(" "), width.saturating_sub(2));
+
+    let mut lines: Vec<Line<'_>> = vec![
+        Line::from(vec![
+            Span::styled("▌", Style::new().fg(accent).add_modifier(Modifier::BOLD)),
+            Span::raw(format!(" {title}")),
+        ]),
+        Line::from(Span::styled(
+            format!("  {badge_text}"),
+            Style::new().fg(if card.fields.state == "closed" {
+                Color::DarkGray
+            } else {
+                Color::Gray
+            }),
+        )),
+    ];
+
+    if is_focused && card.conflict == Conflict::ApplyPending {
+        lines.push(Line::from(Span::styled(
+            "issue changed; apply?",
+            Style::new()
+                .fg(ACCENT_CONFLICT)
+                .add_modifier(Modifier::BOLD),
+        )));
+        if let Some(diffs) = app.conflicts.get(&card.identity) {
+            for diff in diffs {
+                lines.push(Line::from(Span::styled(
+                    format!("  {}: {} → {}", diff.field.as_str(), diff.old, diff.new),
+                    Style::new().fg(ACCENT_CONFLICT),
+                )));
+            }
+        }
     }
-    line
+
+    // Ensure the card block stays filled to its reserved height.
+    while lines.len() < diff_rows as usize + 2 {
+        lines.push(Line::from(""));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn state_badge(card: &crate::outbox::Card) -> String {
-    match &card.fields.state_reason {
-        Some(reason) => format!("{}:{}", card.fields.state, reason),
-        None => card.fields.state.clone(),
+fn render_command_bar(frame: &mut Frame<'_>, area: Rect) {
+    let mut spans: Vec<Span<'_>> = Vec::new();
+    let mut parts = CMD_BAR.split("]  ");
+    if let Some(first) = parts.next() {
+        spans.push(Span::styled(
+            format!("{first}]"),
+            Style::new().fg(Color::Black).bg(Color::Cyan),
+        ));
     }
-}
-
-fn filter_bar_text(filters: &Filters) -> String {
-    let mut parts = Vec::new();
-    if !filters.labels.is_empty() {
-        parts.push(format!("labels:{}", filters.labels.join(",")));
+    for part in parts {
+        spans.push(Span::styled(
+            format!(" {part}"),
+            Style::new().fg(Color::DarkGray),
+        ));
     }
-    if let Some(assignee) = &filters.assignee {
-        parts.push(format!("assignee:{assignee}"));
-    }
-    if let Some(state) = &filters.state {
-        parts.push(format!("state:{state}"));
-    }
-    if let Some(title) = &filters.title {
-        parts.push(format!("title:{title}"));
-    }
-    if parts.is_empty() {
-        "filters: none".to_owned()
-    } else {
-        format!("filters: {}", parts.join(" "))
-    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 #[cfg(test)]
@@ -193,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn render_shows_columns_badges_and_conflict_diff() {
+    fn render_shows_header_columns_badges_and_conflict() {
         let store = Store::open_in_memory().expect("open store");
 
         let mut conflicted = card(1, "to-do", "open");
@@ -215,6 +379,10 @@ mod tests {
         closed.factory_kind = FactoryKind::Ordinary;
         store.insert_card(&closed).expect("insert closed");
 
+        let mut plain_open = card(3, "in-progress", "open");
+        plain_open.factory_kind = FactoryKind::Ordinary;
+        store.insert_card(&plain_open).expect("insert plain open");
+
         let app = App::new(store, RepoIdentity::new("thalixinc", "herdr-board"));
         let backend = TestBackend::new(140, 30);
         let mut terminal = Terminal::new(backend).expect("terminal");
@@ -222,19 +390,17 @@ mod tests {
 
         let text = buffer_text(terminal.backend());
 
-        assert!(
-            text.contains("herdr-board — thalixinc/herdr-board"),
-            "title"
-        );
-        assert!(text.contains("to-do"), "column header");
+        assert!(text.contains("herdr-board"), "header name");
+        assert!(text.contains("● running"), "running indicator");
+        assert!(text.contains("TO-DO"), "uppercase column header");
         assert!(text.contains("open"), "open state badge");
         assert!(text.contains("closed"), "closed state badge");
         assert!(text.contains("bug"), "label chip");
         assert!(text.contains("⚙"), "factory badge");
         assert!(text.contains("issue changed; apply?"), "conflict marker");
-        assert!(text.contains("body"), "diff field");
         assert!(text.contains("old body"), "diff old value");
         assert!(text.contains("new body"), "diff new value");
+        assert!(text.contains("[ s Sync ]"), "command bar");
     }
 
     #[test]
@@ -245,7 +411,8 @@ mod tests {
         let mut terminal = Terminal::new(backend).expect("terminal");
         terminal.draw(|frame| render(frame, &app)).expect("draw");
         let text = buffer_text(terminal.backend());
-        assert!(text.contains("(empty board)"));
-        assert!(text.contains("filters: none"));
+        assert!(text.contains("TO-DO · 0"), "empty column still renders");
+        assert!(text.contains("DONE · 0"), "empty column still renders");
+        assert!(text.contains("[ All ]"), "toolbar tab");
     }
 }

@@ -109,11 +109,13 @@ impl BoardModel {
             }
         }
 
+        // Always render every board column (even empty ones), so the kanban
+        // shows the full pipeline at a glance — matching the reference's
+        // "PLAN · 0" empty columns.
         let mut columns = Vec::new();
         for name in BOARD_COLUMNS {
-            if let Some(cards) = known.remove(name) {
-                columns.push(column_from_cards((*name).to_owned(), cards));
-            }
+            let cards = known.remove(name).unwrap_or_default();
+            columns.push(column_from_cards((*name).to_owned(), cards));
         }
         if !uncategorized.is_empty() {
             columns.push(column_from_cards(UNCATEGORIZED.to_owned(), uncategorized));
@@ -317,8 +319,8 @@ mod tests {
         let cards = vec![card(1, "to-do", "a"), card(2, "blocked", "b")];
         let model = BoardModel::from_cards(cards, &Filters::default());
         let names: Vec<&str> = model.columns.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, vec!["to-do", "uncategorized"]);
-        assert_eq!(model.columns[1].entries[0].card().identity.number, 2);
+        assert_eq!(names, vec!["to-do", "in-progress", "done", "uncategorized"]);
+        assert_eq!(model.columns[3].entries[0].card().identity.number, 2);
     }
 
     #[test]
