@@ -32,8 +32,9 @@ pub use outbox::{
 };
 pub use push::{apply_push, discard_push, publish_draft, push_changes, PushError};
 pub use receiver::{
-    prove_actor, receive, reconfirm, replay, startup_sweep, status_query, Actor, ActorSource,
-    ExternalResponse, Handoff, HandoffResult, HandoffTransport, Receiver, ReceiverError, TrustRoot,
+    cancel_receipt, prove_actor, receive, reconfirm, replay, startup_sweep, status_query, Actor,
+    ActorSource, CfQueueContract, CfSubmission, ExternalResponse, Handoff, HandoffResult,
+    HandoffTransport, RealHandoffTransport, Receiver, ReceiverError, TrustRoot,
     STALENESS_THRESHOLD,
 };
 pub use sync::{

@@ -220,7 +220,7 @@ fn handed_off_persists_across_reopen_and_sweep_surfaces_it() {
 
     // Sweep with "now" past the staleness threshold surfaces it.
     let now = receipt.created_at + STALENESS_THRESHOLD.as_secs() as i64 + 1;
-    let stale = startup_sweep(&store, now).unwrap();
+    let stale = startup_sweep(&store, now);
     assert_eq!(stale.len(), 1);
     assert_eq!(stale[0].receipt_id, receipt.receipt_id);
 
@@ -276,14 +276,14 @@ fn reconfirm_redispatches_handed_off_receipt() {
     assert_eq!(handed_off.outcome, Outcome::HandedOff);
 
     // Re-confirm with a healthy transport: same receipt, now accepted.
-    let reaccepted = reconfirm(&store, &handed_off, &accept).unwrap();
+    let reaccepted = reconfirm(&store, &handed_off.receipt_id, &accept).unwrap();
     assert_eq!(reaccepted.receipt_id, handed_off.receipt_id);
     assert_eq!(reaccepted.outcome, Outcome::Accepted);
     assert_eq!(accept.calls.load(Ordering::SeqCst), 1);
 
     // Re-confirming again is refused: terminal outcomes are final.
     assert!(matches!(
-        reconfirm(&store, &reaccepted, &accept),
+        reconfirm(&store, &reaccepted.receipt_id, &accept),
         Err(ReceiverError::Store(_))
     ));
 }
@@ -299,17 +299,11 @@ fn status_query_records_answer_and_replay_is_noop() {
     let handed_off = store.get_by_handoff_id(&h.handoff_id).unwrap().unwrap();
 
     // Record an out-of-band external answer (accepted).
-    let answered = status_query(
-        &store,
-        &handed_off,
-        true,
-        &ExternalResponse::new("ok: acked"),
-    )
-    .unwrap();
+    let answered = status_query(&store, &handed_off.receipt_id, true, "ok: acked").unwrap();
     assert_eq!(answered.outcome, Outcome::Accepted);
     assert_eq!(answered.external_response.as_deref(), Some("ok: acked"));
 
     // Replay: idempotent no-op — returns the receipt unchanged.
-    let replayed = replay(&store, &answered).unwrap();
+    let replayed = replay(&store, &answered.receipt_id).unwrap();
     assert_eq!(replayed, answered);
 }
