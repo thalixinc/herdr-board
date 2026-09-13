@@ -1,0 +1,8 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running `target/debug/examples/factory_outbox_demo`
+receipt 7756d25d-27fe-4e2b-be2e-5d2c6b719c1b outcome=accepted
+stopped factory: Transport("cf-queue unreachable")
+receipt bc0cd06a-c4b9-497e-ad10-e01986685d19 outcome=handed-off
+sweep: 1 stale handed-off receipt(s)
+  bc0cd06a-c4b9-497e-ad10-e01986685d19 (301s old)
+reconfirmed: bc0cd06a-c4b9-497e-ad10-e01986685d19 outcome=accepted
