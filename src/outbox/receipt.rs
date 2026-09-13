@@ -342,7 +342,8 @@ impl Store {
         }
     }
 
-    fn receipt_by_id(&self, receipt_id: &ReceiptId) -> Result<Option<Receipt>, StoreError> {
+    /// Fetch a receipt by its id (reconciliation lookup).
+    pub fn receipt_by_id(&self, receipt_id: &ReceiptId) -> Result<Option<Receipt>, StoreError> {
         self.query_receipt_opt(
             "SELECT receipt_id, handoff_id, request_id, digest, actor, actor_source, \
              identity, revision, factory, outcome, external_response, created_at, finalized_at \

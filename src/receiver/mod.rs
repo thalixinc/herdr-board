@@ -5,10 +5,14 @@
 mod actor;
 mod handoff;
 mod reconcile;
+mod transport;
 
 pub use actor::{prove_actor, Actor, ActorSource, TrustRoot};
 pub use handoff::{ExternalResponse, Handoff, HandoffResult, HandoffTransport};
-pub use reconcile::{reconfirm, replay, startup_sweep, status_query, STALENESS_THRESHOLD};
+pub use reconcile::{
+    cancel_receipt, reconfirm, replay, startup_sweep, status_query, STALENESS_THRESHOLD,
+};
+pub use transport::{CfQueueContract, CfSubmission, RealHandoffTransport};
 
 use std::fmt;
 
