@@ -44,7 +44,10 @@ pub use sync::{
     apply_changes, defer_changes, sync, Credentials, IssueFull, PullClient, RealGitHubClient,
     SyncError, SyncSummary, DEFAULT_COLUMN,
 };
-pub use ui::{render, App, BoardColumn, BoardModel, Filters, ParentRef};
+pub use ui::{
+    dispatch, render, run_loop, Action, App, BoardColumn, BoardModel, Deps, Filters, KeyMap,
+    ParentRef, UiError,
+};
 
 /// The plugin identity, surfaced to the herdr pane metadata.
 pub const PLUGIN_NAME: &str = "herdr-board";
