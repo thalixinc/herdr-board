@@ -1,0 +1,12 @@
+     Running unittests src/lib.rs (target/debug/deps/herdr_board-70cf7dafb3684be9)
+
+running 6 tests
+test ui::render::tests::badge_lines_elides_only_an_oversized_chip ... ok
+test ui::render::tests::badge_lines_single_line_when_short ... ok
+test ui::render::tests::badge_lines_wraps_whole_chips_never_split ... ok
+test ui::render::tests::render_empty_board ... ok
+test ui::render::tests::render_wraps_long_label_and_grows_card ... ok
+test ui::render::tests::render_shows_header_columns_badges_and_conflict ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 33 filtered out; finished in 0.01s
+
