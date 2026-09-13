@@ -1,0 +1,162 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/herdr_board-70cf7dafb3684be9)
+
+running 22 tests
+test digest::canonical::tests::framing_disambiguates_adjacent_fields ... ok
+test digest::canonical::tests::identity_lowercases_owner_and_repo ... ok
+test digest::canonical::tests::framing_changes_with_version ... ok
+test digest::canonical::tests::identity_number_has_no_leading_zeros ... ok
+test digest::hash::tests::golden_vector ... ok
+test digest::hash::tests::digest_id_is_16_hex_prefix ... ok
+test digest::hash::tests::reorder_changes_digest ... ok
+test digest::hash::tests::same_input_same_digest ... ok
+test kind::tests::canonical_serialization_round_trips ... ok
+test kind::tests::unknown_kind_is_rejected ... ok
+test digest::hash::tests::body_is_verbatim ... ok
+test kind::tests::default_is_ordinary ... ok
+test outbox::cards::tests::labels_empty_and_whitespace ... ok
+test digest::hash::tests::version_is_inside_the_hash ... ok
+test outbox::cards::tests::labels_round_trip ... ok
+test sync::client::tests::gh_issue_maps_to_issue_full ... ok
+test sync::client::tests::null_body_and_empty_labels_tolerated ... ok
+test sync::conflict::tests::each_field_diff_reported_in_canonical_order ... ok
+test sync::conflict::tests::no_drift_produces_no_diffs ... ok
+test sync::conflict::tests::option_and_labels_rendered_as_strings ... ok
+test tests::exposes_semver_version ... ok
+test tests::exposes_stable_identity ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/herdr_board-bacf582e4cf3b814)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cards_store.rs (target/debug/deps/cards_store-b93ca7ecf3483fa3)
+
+running 7 tests
+test labels_round_trip_through_store ... ok
+test apply_preserves_board_local_fields ... ok
+test empty_and_nullable_fields_round_trip ... ok
+test duplicate_identity_is_rejected ... ok
+test insert_get_list ... ok
+test conflict_record_get_apply_defer ... ok
+test persists_across_reopen ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/create_intent_lifecycle.rs (target/debug/deps/create_intent_lifecycle-b5674b152cfc7635)
+
+running 7 tests
+test insert_and_transition_to_created ... ok
+test mark_issued_is_guarded ... ok
+test duplicate_marker_is_rejected ... ok
+test mark_failed_stores_reason ... ok
+test mark_cancelled_guarded_to_non_terminal ... ok
+test list_issued_returns_only_issued ... ok
+test persists_across_reopen ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/create_receiver_lifecycle.rs (target/debug/deps/create_receiver_lifecycle-c3bff5c023709107)
+
+running 8 tests
+test candidates_prefer_marker_match ... ok
+test link_refuses_nonexistent_issue ... ok
+test candidates_fall_back_to_normalized_title ... ok
+test cancel_stops_tracking ... ok
+test clean_create_sets_issue_number ... ok
+test link_resolves_issued_to_created ... ok
+test lost_response_stays_issued ... ok
+test block_auto_replay_sends_exactly_one_create ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/digest_lifecycle.rs (target/debug/deps/digest_lifecycle-0d1feb95d16d57ed)
+
+running 6 tests
+test clean_lifecycle_persist_dispatch_acceptance ... ok
+test multiple_fields_drift_together ... ok
+test refusal_outcome_wraps_the_mismatch ... ok
+test body_drift_at_dispatch_yields_field_mismatch ... ok
+test revision_drift_at_acceptance_yields_field_mismatch ... ok
+test stored_digest_is_never_rewritten_after_failed_verify ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/digest_v2.rs (target/debug/deps/digest_v2-5987bd55fb64e99a)
+
+running 8 tests
+test factory_kind_is_hashed_in_v2 ... ok
+test compute_uses_current_schema ... ok
+test factory_kind_drift_yields_mismatch ... ok
+test version_on_record_verifies_v1 ... ok
+test cross_version_mismatch ... ok
+test v1_and_v2_golden_vectors_differ ... ok
+test v1_framing_ignores_factory_kind ... ok
+test version_on_record_verifies_v2 ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/draft_creation_lifecycle.rs (target/debug/deps/draft_creation_lifecycle-50eba5671f1d3705)
+
+running 8 tests
+test factory_kind_of_missing_draft_is_not_found ... ok
+test create_factory_draft_directly ... ok
+test promote_rejects_already_factory_draft ... ok
+test promote_does_not_start_work ... ok
+test create_draft_persists_kind_atomically ... ok
+test promote_preserves_factory_kind_and_builds_request ... ok
+test cannot_promote_twice ... ok
+test factory_kind_survives_reopen ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/outbox_lifecycle.rs (target/debug/deps/outbox_lifecycle-fb58419d80717755)
+
+running 7 tests
+test default_path_uses_state_dir_when_set ... ok
+test dedup_rejects_duplicate_inflight_digest ... ok
+test terminal_outcome_allows_fresh_attempt_of_same_input ... ok
+test insert_read_transition ... ok
+test active_attempt_rejects_second_inflight_for_request ... ok
+test duplicate_handoff_id_is_rejected ... ok
+test persists_across_reopen ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/receiver_lifecycle.rs (target/debug/deps/receiver_lifecycle-c7f567bd7c1f1f78)
+
+running 10 tests
+test forged_actor_is_refused ... ok
+test drifted_body_is_refused_with_mismatch ... ok
+test coordinator_refusal_is_a_terminal_receipt ... ok
+test clean_path_accepts ... ok
+test reconfirm_redispatches_handed_off_receipt ... ok
+test idempotent_redelivery_returns_same_receipt ... ok
+test status_query_records_answer_and_replay_is_noop ... ok
+test two_racing_receives_yield_one_active_receipt ... ok
+test inflight_dedup_returns_active_receipt ... ok
+test handed_off_persists_across_reopen_and_sweep_surfaces_it ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/sync_lifecycle.rs (target/debug/deps/sync_lifecycle-a1d6bb28ce0146a2)
+
+running 6 tests
+test first_pull_inserts_with_defaults ... ok
+test defer_keeps_the_flag ... ok
+test apply_accepts_only_the_seven_shared_fields ... ok
+test changed_updated_at_flags_conflict_with_exact_diffs ... ok
+test empty_labels_assignee_milestone_tolerated ... ok
+test unchanged_resync_is_a_noop ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests herdr_board
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

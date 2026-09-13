@@ -11,6 +11,7 @@ pub mod digest;
 pub mod kind;
 pub mod outbox;
 pub mod receiver;
+pub mod sync;
 
 pub use card::{create_draft, factory_kind_of, promote_to_factory_request, CardError, Draft};
 
@@ -24,13 +25,17 @@ pub use digest::{
 };
 pub use kind::FactoryKind;
 pub use outbox::{
-    CreateIntent, CreateOutcome, HandoffId, IntentId, Marker, Outcome, Receipt, ReceiptId,
-    RequestRecord, Store,
+    CanonicalFields, Card, CardField, CardFieldDiff, Conflict, CreateIntent, CreateOutcome,
+    HandoffId, IntentId, Marker, Outcome, Receipt, ReceiptId, RequestRecord, Store,
 };
 pub use receiver::{
     prove_actor, receive, reconfirm, replay, startup_sweep, status_query, Actor, ActorSource,
     ExternalResponse, Handoff, HandoffResult, HandoffTransport, Receiver, ReceiverError, TrustRoot,
     STALENESS_THRESHOLD,
+};
+pub use sync::{
+    apply_changes, defer_changes, sync, Credentials, IssueFull, PullClient, RealGitHubClient,
+    SyncError, SyncSummary, DEFAULT_COLUMN,
 };
 
 /// The plugin identity, surfaced to the herdr pane metadata.

@@ -1,0 +1,7 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running `target/debug/examples/sync_demo`
+sync: inserted=1 unchanged=0 conflicted=0
+re-sync: inserted=0 unchanged=0 conflicted=1
+card conflict: apply-pending
+  body: "pull issues" -> "pull issues (revised)"
+applied: conflict=none body="pull issues (revised)"
