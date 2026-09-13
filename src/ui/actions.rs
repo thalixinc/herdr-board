@@ -86,7 +86,14 @@ impl KeyMap {
                 (KeyModifiers::NONE, KeyCode::Right) => Some(Action::FilterNext),
                 (KeyModifiers::NONE, KeyCode::Char('x')) => Some(Action::ClearFilters),
                 (KeyModifiers::CONTROL, KeyCode::Char('c')) => Some(Action::Quit),
-                (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::FilterChar(c)),
+                // Free-text entry accepts the typed character regardless of
+                // SHIFT (uppercase letters, symbols) so no keystroke is
+                // dropped silently; only Ctrl/Alt chords are withheld.
+                (mods, KeyCode::Char(c))
+                    if !mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    Some(Action::FilterChar(c))
+                }
                 _ => None,
             };
         }
@@ -339,4 +346,55 @@ fn shift_column(current: &str, delta: i32) -> String {
     };
     let next = (index as i32 + delta).clamp(0, BOARD_COLUMNS.len() as i32 - 1) as usize;
     BOARD_COLUMNS[next].to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    use super::{Action, KeyMap};
+
+    #[test]
+    fn filter_accepts_shifted_uppercase_char() {
+        let map = KeyMap;
+        // `Shift+E` arrives as `Char('E')` with the SHIFT modifier set; it must
+        // type the uppercase letter rather than being dropped.
+        assert_eq!(
+            map.resolve(KeyCode::Char('E'), KeyModifiers::SHIFT, true),
+            Some(Action::FilterChar('E'))
+        );
+    }
+
+    #[test]
+    fn filter_accepts_shifted_symbol_char() {
+        let map = KeyMap;
+        // `Shift+1` arrives as `Char('!')` with the SHIFT modifier set.
+        assert_eq!(
+            map.resolve(KeyCode::Char('!'), KeyModifiers::SHIFT, true),
+            Some(Action::FilterChar('!'))
+        );
+    }
+
+    #[test]
+    fn filter_control_and_plain_bindings_unchanged() {
+        let map = KeyMap;
+        // Ctrl+C still quits; a plain `x` still clears all filters; Ctrl/Alt
+        // chords are withheld rather than typed.
+        assert_eq!(
+            map.resolve(KeyCode::Char('c'), KeyModifiers::CONTROL, true),
+            Some(Action::Quit)
+        );
+        assert_eq!(
+            map.resolve(KeyCode::Char('x'), KeyModifiers::NONE, true),
+            Some(Action::ClearFilters)
+        );
+        assert_eq!(
+            map.resolve(KeyCode::Char('e'), KeyModifiers::CONTROL, true),
+            None
+        );
+        assert_eq!(
+            map.resolve(KeyCode::Char('e'), KeyModifiers::ALT, true),
+            None
+        );
+    }
 }
