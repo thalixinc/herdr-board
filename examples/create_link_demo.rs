@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use herdr_board::{
     issue, link, Candidate, CreateIntent, CreateOutcome, CreateResult, FactoryKind, GitHubClient,
-    Issue, Marker, RepoIdentity, Store,
+    Issue, IssuePatch, Marker, RepoIdentity, Store, UpdateResult,
 };
 
 /// Always loses the response (uncertain), but knows issue 1234 exists for the
@@ -31,6 +31,15 @@ impl GitHubClient for LostResponseClient {
             number,
             title: "Fix the board sync".to_string(),
         })
+    }
+
+    fn update_issue(
+        &self,
+        _repo: &RepoIdentity,
+        _number: u64,
+        _patch: &IssuePatch,
+    ) -> UpdateResult {
+        UpdateResult::Uncertain("network drop".to_string())
     }
 }
 

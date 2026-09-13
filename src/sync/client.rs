@@ -5,7 +5,10 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use crate::create::RepoIdentity;
+use crate::create::{
+    Candidate, CreateResult, GitHubClient, Issue, IssuePatch, RepoIdentity, UpdateResult,
+};
+use crate::outbox::CreateIntent;
 
 /// A fully-expanded GitHub issue as fetched from the read API.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +103,37 @@ impl RealGitHubClient {
         }
         req.call().ok()?.into_string().ok()
     }
+
+    fn with_headers(&self, req: ureq::Request) -> ureq::Request {
+        let mut req = req
+            .set("Accept", "application/vnd.github+json")
+            .set("User-Agent", "herdr-board")
+            .set("X-GitHub-Api-Version", "2022-11-28");
+        if let Some(token) = &self.token {
+            req = req.set("Authorization", &format!("Bearer {token}"));
+        }
+        req
+    }
+
+    /// Send a JSON write and classify the outcome: a 4xx/5xx is a definite
+    /// failure; a transport error (no response) is uncertain.
+    fn send_write(
+        &self,
+        req: ureq::Request,
+        payload: serde_json::Value,
+    ) -> Result<String, WriteFailure> {
+        let body = serde_json::to_string(&payload).expect("json value always serializes");
+        let req = self
+            .with_headers(req)
+            .set("Content-Type", "application/json");
+        match req.send_string(&body) {
+            Ok(response) => Ok(response.into_string().unwrap_or_default()),
+            Err(ureq::Error::Status(code, _)) => {
+                Err(WriteFailure::Definite(format!("HTTP {code}")))
+            }
+            Err(ureq::Error::Transport(t)) => Err(WriteFailure::Uncertain(t.to_string())),
+        }
+    }
 }
 
 impl PullClient for RealGitHubClient {
@@ -124,6 +158,149 @@ impl PullClient for RealGitHubClient {
             .ok()
             .map(IssueFull::from)
     }
+}
+
+impl GitHubClient for RealGitHubClient {
+    fn create_issue(
+        &self,
+        repo: &RepoIdentity,
+        intent: &CreateIntent,
+        marker_comment: &str,
+    ) -> CreateResult {
+        let url = format!(
+            "{}/repos/{}/{}/issues",
+            self.api_base, repo.owner, repo.repo
+        );
+        let labels: serde_json::Value = serde_json::from_str(&intent.labels)
+            .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
+        let payload = serde_json::json!({
+            "title": intent.title.as_str(),
+            "body": format!("{}{}", intent.body, marker_comment),
+            "labels": labels,
+        });
+        match self.send_write(ureq::post(&url), payload) {
+            Ok(text) => match serde_json::from_str::<GhIssue>(&text) {
+                Ok(issue) => CreateResult::Created(issue.number),
+                Err(e) => CreateResult::Failed(format!("bad create response: {e}")),
+            },
+            Err(WriteFailure::Definite(msg)) => CreateResult::Failed(msg),
+            Err(WriteFailure::Uncertain(msg)) => CreateResult::Uncertain(msg),
+        }
+    }
+
+    fn search_issues(&self, repo: &RepoIdentity, query: &str) -> Vec<Candidate> {
+        let q = format!("repo:{}/{} {}", repo.owner, repo.repo, query);
+        let path = format!("/search/issues?q={}", urlencode(&q));
+        let text = match self.get_text(&path) {
+            Some(text) => text,
+            None => return Vec::new(),
+        };
+        let response: GhSearchResponse = match serde_json::from_str(&text) {
+            Ok(response) => response,
+            Err(_) => return Vec::new(),
+        };
+        response
+            .items
+            .into_iter()
+            .map(|issue| Candidate {
+                number: issue.number,
+                title: issue.title,
+                body_snippet: issue.body.unwrap_or_default().chars().take(80).collect(),
+                created_at: None,
+            })
+            .collect()
+    }
+
+    fn get_issue(&self, repo: &RepoIdentity, number: u64) -> Option<Issue> {
+        let path = format!("/repos/{}/{}/issues/{number}", repo.owner, repo.repo);
+        let text = self.get_text(&path)?;
+        let issue: GhIssue = serde_json::from_str(&text).ok()?;
+        Some(Issue {
+            number: issue.number,
+            title: issue.title,
+        })
+    }
+
+    fn update_issue(&self, repo: &RepoIdentity, number: u64, patch: &IssuePatch) -> UpdateResult {
+        let url = format!(
+            "{}/repos/{}/{}/issues/{number}",
+            self.api_base, repo.owner, repo.repo
+        );
+        let payload = patch_to_json(patch);
+        match self.send_write(ureq::patch(&url), payload) {
+            Ok(text) => match serde_json::from_str::<GhIssue>(&text) {
+                Ok(issue) => UpdateResult::Updated {
+                    updated_at: issue.updated_at,
+                },
+                Err(e) => UpdateResult::Failed(format!("bad update response: {e}")),
+            },
+            Err(WriteFailure::Definite(msg)) => UpdateResult::Failed(msg),
+            Err(WriteFailure::Uncertain(msg)) => UpdateResult::Uncertain(msg),
+        }
+    }
+}
+
+/// A write failed with a definite rejection, or was lost (uncertain).
+enum WriteFailure {
+    Definite(String),
+    Uncertain(String),
+}
+
+/// Minimal RFC-3986 percent-encoding for the search query (unreserved chars
+/// pass through; everything else is escaped).
+fn urlencode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Build the PATCH body from an [`IssuePatch`]: only present fields are sent;
+/// assignee/milestone map `Some(None)` → JSON `null` (clear).
+fn patch_to_json(patch: &IssuePatch) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    if let Some(title) = &patch.title {
+        map.insert("title".to_owned(), serde_json::Value::String(title.clone()));
+    }
+    if let Some(body) = &patch.body {
+        map.insert("body".to_owned(), serde_json::Value::String(body.clone()));
+    }
+    if let Some(labels) = &patch.labels {
+        map.insert(
+            "labels".to_owned(),
+            serde_json::Value::Array(
+                labels
+                    .iter()
+                    .map(|l| serde_json::Value::String(l.clone()))
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(assignee) = &patch.assignee {
+        map.insert(
+            "assignee".to_owned(),
+            match assignee {
+                Some(name) => serde_json::Value::String(name.clone()),
+                None => serde_json::Value::Null,
+            },
+        );
+    }
+    if let Some(milestone) = &patch.milestone {
+        map.insert(
+            "milestone".to_owned(),
+            match milestone {
+                Some(title) => serde_json::Value::String(title.clone()),
+                None => serde_json::Value::Null,
+            },
+        );
+    }
+    serde_json::Value::Object(map)
 }
 
 /// The wire shape of a GitHub REST issue (the subset the board mirrors).
@@ -155,6 +332,13 @@ struct GhUser {
 #[derive(Debug, Deserialize)]
 struct GhMilestone {
     title: String,
+}
+
+/// The wire shape of a GitHub search response (the `items` slice).
+#[derive(Debug, Deserialize)]
+struct GhSearchResponse {
+    #[serde(default)]
+    items: Vec<GhIssue>,
 }
 
 impl From<GhIssue> for IssueFull {
@@ -233,5 +417,43 @@ mod tests {
         assert!(full.assignee.is_none());
         assert!(full.milestone.is_none());
         assert!(full.state_reason.is_none());
+    }
+
+    #[test]
+    fn patch_to_json_tristate() {
+        // Empty patch → no keys.
+        assert_eq!(patch_to_json(&IssuePatch::default()), serde_json::json!({}));
+
+        // Set values (single-Option present).
+        let set = patch_to_json(&IssuePatch {
+            title: Some("t".to_owned()),
+            labels: Some(vec!["a".to_owned()]),
+            assignee: Some(Some("bob".to_owned())),
+            milestone: Some(Some("v1".to_owned())),
+            ..IssuePatch::default()
+        });
+        assert_eq!(
+            set,
+            serde_json::json!({
+                "title": "t",
+                "labels": ["a"],
+                "assignee": "bob",
+                "milestone": "v1",
+            })
+        );
+
+        // Clear values (double-Option Some(None) → JSON null).
+        let clear = patch_to_json(&IssuePatch {
+            assignee: Some(None),
+            milestone: Some(None),
+            ..IssuePatch::default()
+        });
+        assert_eq!(
+            clear,
+            serde_json::json!({
+                "assignee": null,
+                "milestone": null,
+            })
+        );
     }
 }

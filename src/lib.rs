@@ -17,7 +17,7 @@ pub use card::{create_draft, factory_kind_of, promote_to_factory_request, CardEr
 
 pub use create::{
     cancel, candidates, issue, link, marker_comment, Candidate, CreateError, CreateResult,
-    GitHubClient, Issue, Publisher, RepoIdentity,
+    GitHubClient, Issue, IssuePatch, Publisher, RepoIdentity, UpdateResult,
 };
 pub use digest::{
     compute, compute_with_version, verify, CanonicalRequest, Digest, DigestId, Field, FieldDiff,
