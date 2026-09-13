@@ -463,7 +463,7 @@ fn classify_insert_constraint(err: rusqlite::Error) -> StoreError {
             if msg.contains("handoff_id") {
                 return StoreError::DuplicateHandoff;
             }
-            if msg.contains("digest") || msg.contains("request_id") {
+            if msg.contains("digest") || msg.contains("request_id") || msg.contains("identity") {
                 return StoreError::ActiveAttemptExists;
             }
         }

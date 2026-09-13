@@ -178,6 +178,14 @@ CREATE UNIQUE INDEX idx_pending_writes_unresolved
     ON pending_writes(owner, repo, number) WHERE outcome IN ('pending','failed','uncertain');
 ";
 
+/// Migration v7 (VS3): identity-scoped active-attempt uniqueness — at most one
+/// non-terminal receipt per *issue* (not per digest), so a drifted re-click on
+/// an in-flight issue converges instead of double-running.
+const MIGRATION_V7: &str = "
+CREATE UNIQUE INDEX idx_receipts_active_identity
+    ON receipts(identity) WHERE outcome IN ('pending','handed-off');
+";
+
 /// A single connection to the outbox SQLite database, with the migration and
 /// receipt operations.
 pub struct Store {
@@ -274,6 +282,13 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
         let tx = conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
         tx.execute_batch(MIGRATION_V6).map_err(StoreError::Sqlite)?;
         tx.pragma_update(None, "user_version", 6_i64)
+            .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+    }
+    if version < 7 {
+        let tx = conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        tx.execute_batch(MIGRATION_V7).map_err(StoreError::Sqlite)?;
+        tx.pragma_update(None, "user_version", 7_i64)
             .map_err(StoreError::Sqlite)?;
         tx.commit().map_err(StoreError::Sqlite)?;
     }
