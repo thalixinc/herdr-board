@@ -8,6 +8,7 @@
 pub mod card;
 pub mod create;
 pub mod digest;
+pub mod factory;
 pub mod kind;
 pub mod outbox;
 pub mod push;
@@ -24,6 +25,7 @@ pub use digest::{
     compute, compute_with_version, verify, CanonicalRequest, Digest, DigestId, Field, FieldDiff,
     Identity, Mismatch, Refusal, StoredFields, SCHEMA_VERSION,
 };
+pub use factory::{process_with_factory, ProcessError};
 pub use kind::FactoryKind;
 pub use outbox::{
     CanonicalFields, Card, CardField, CardFieldDiff, Conflict, CreateIntent, CreateOutcome,
