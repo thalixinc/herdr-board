@@ -126,7 +126,7 @@ fn sync_render_move_render_cycle() {
 
     // 2. Render shows the card in the first (default) column.
     let first = render_text(&app);
-    assert!(first.contains("to-do"));
+    assert!(first.contains("TO-DO"));
     assert!(first.contains("Fix sync"));
 
     // 3. Move right: board-local column change, then render again.
@@ -140,7 +140,7 @@ fn sync_render_move_render_cycle() {
         "in-progress"
     );
     let second = render_text(&app);
-    assert!(second.contains("in-progress"));
+    assert!(second.contains("IN-PROGRESS"));
     assert!(second.contains("Fix sync"));
 
     let _ = std::fs::remove_dir_all(&dir);

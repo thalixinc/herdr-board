@@ -14,12 +14,3 @@ pub use model::{
     UNCATEGORIZED,
 };
 pub use render::render;
-
-use ratatui::style::{Color, Modifier, Style};
-
-/// The board title style.
-pub(crate) const TITLE_STYLE: Style = Style::new().add_modifier(Modifier::BOLD);
-
-/// The "issue changed; apply?" conflict marker style.
-pub(crate) const CONFLICT_STYLE: Style =
-    Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
