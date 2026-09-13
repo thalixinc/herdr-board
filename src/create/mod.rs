@@ -11,7 +11,10 @@ mod github;
 mod link;
 mod reconcile;
 
-pub use github::{marker_comment, Candidate, CreateResult, GitHubClient, Issue, RepoIdentity};
+pub use github::{
+    marker_comment, Candidate, CreateResult, GitHubClient, Issue, IssuePatch, RepoIdentity,
+    UpdateResult,
+};
 pub use link::{cancel, candidates, link};
 pub use reconcile::{search_marker, startup_sweep};
 
