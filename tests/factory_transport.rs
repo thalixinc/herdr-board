@@ -45,12 +45,12 @@ fn draft(store: &Store, body: &str) -> herdr_board::Draft {
 }
 
 /// The real transport wired to a stub `herdr-axi` binary path.
-fn axi_transport(bin: &str) -> RealHandoffTransport<impl Fn(&CfQueueContract) -> CfSubmission> {
+fn axi_transport(
+    bin: &str,
+) -> RealHandoffTransport<impl Fn(&CfQueueContract, &str) -> CfSubmission> {
     let target = AxiTarget::new("herdr-board", "coordinator", None);
     let bin = bin.to_owned();
-    RealHandoffTransport::new(None, move |c| {
-        herdr_axi_send_with_bin(bin.as_str(), &target, c)
-    })
+    RealHandoffTransport::new(move |c, id| herdr_axi_send_with_bin(bin.as_str(), &target, c, id))
 }
 
 #[test]
@@ -77,7 +77,12 @@ fn submitted_disposition_finalizes_accepted() {
     .expect("process ok");
 
     assert_eq!(receipt.outcome, Outcome::Accepted);
-    assert_eq!(receipt.external_response.as_deref(), Some("submitted"));
+    // The carried result is the coordinator's response (correlation id + state),
+    // kept verbatim for a later `status_query`.
+    let response: serde_json::Value =
+        serde_json::from_str(receipt.external_response.as_deref().unwrap_or("null"))
+            .expect("submitted external_response is JSON");
+    assert_eq!(response["state"], "idle");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -152,7 +157,7 @@ fn unknown_disposition_leaves_handed_off() {
 }
 
 #[test]
-fn reconfirm_redispatches_same_message_id() {
+fn reconfirm_redispatches_with_new_message_id() {
     set_workspace();
     let dir_a = common::scratch_dir("factory-reconfirm-a");
     let dir_b = common::scratch_dir("factory-reconfirm-b");
@@ -193,7 +198,9 @@ fn reconfirm_redispatches_same_message_id() {
     .unwrap();
     assert_eq!(accepted.outcome, Outcome::Accepted);
 
-    // Both dispatches carried the same message_id (idempotent re-dispatch).
+    // Each attempt carries a fresh correlation id: a reused id would be
+    // deduplicated by herdr-axi (terminal-once) and re-confirm would return the
+    // stale `not-submitted` disposition instead of re-prompting.
     let envelopes = common::captured_envelopes(&capture);
     assert_eq!(envelopes.len(), 2, "one dispatch per attempt");
     let first_id = envelopes[0]["params"]["message_id"]
@@ -202,9 +209,9 @@ fn reconfirm_redispatches_same_message_id() {
     let second_id = envelopes[1]["params"]["message_id"]
         .as_str()
         .expect("message_id is a string");
-    assert_eq!(
+    assert_ne!(
         first_id, second_id,
-        "reconfirm re-sends the same message_id"
+        "reconfirm re-dispatches with a fresh message_id"
     );
 
     let _ = std::fs::remove_dir_all(&dir_a);

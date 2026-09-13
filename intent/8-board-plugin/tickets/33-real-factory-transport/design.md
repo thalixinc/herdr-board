@@ -54,11 +54,12 @@ the stub with a real closure that shells out to herdr-axi:
 
 1. **Serialize.** Encode `CfQueueContract` as the message body (a stable text/JSON form carrying
    all five fields — the board's own format; the board owns its representation, it never re-owns
-   cf-queue's encoding — G2 §4 boundary). Pass `--message-id <handoff_id>` so a re-dispatch is
-   idempotent at the transport (`herdr-axi send` dedups on `message_id`).
+   cf-queue's encoding — G2 §4 boundary). Pass `--message-id <correlation id>` where the
+   correlation id is a **fresh, non-content-derived value per dispatch attempt** (see retry
+   semantics below; `herdr-axi send` dedups terminal-once on `message_id`).
 2. **Invoke.** Blocking subprocess: `herdr-axi --request-file <envelope>` with
    `operation = send`, `station = (project, coordinator)`, `params.text = body`, `message_id =
-   handoff_id` — **synchronous by construction**, matching the frozen
+   <per-attempt correlation id>` — **synchronous by construction**, matching the frozen
    `HandoffTransport::handoff` contract (blocking between two committed write-ahead transactions).
    The target role is the factory's **coordinator** (`DEFAULT_FACTORY = "coordinator"`, already
    the `f` action's target); the coordinator accepts/rejects via its own queue + SDLC state — the
@@ -74,11 +75,20 @@ the stub with a real closure that shells out to herdr-axi:
    This is the same three-way contract the G3/VS3 designs already froze; `herdr-axi send`'s own
    disposition enum maps onto it one-to-one with no new surface.
 
+4. **Retry semantics (corrected).** The correlation id is **per-attempt and never
+   content-derived** — the transport generates a fresh UUID/nonce for every dispatch attempt,
+   including `reconfirm`. This is deliberate: `herdr-axi send` dedups *terminal-once* on
+   `message_id` (a reused id returns the prior disposition **without re-prompting**), so
+   content-keying the id would make `reconfirm`-after-busy a no-op and would silently drop
+   distinct dispatches with identical five fields. The board's **outbox is the
+   idempotency/durability layer** (per REQUIREMENTS.md), so transport dedup is not needed for
+   board-side idempotency: `reconfirm` = new attempt = new id, and the receipt state already
+   prevents double-acceptance.
+
 Concrete files:
 - **`src/receiver/transport.rs`** — add a `herdr_axi` subprocess helper (mirroring herdr-axi's own
   `send_with_bin`/`abridge::send` pattern) + the disposition→`CfSubmission` mapping; keep
-  `RealHandoffTransport` (or a new `AxiHandoffTransport` that impls `HandoffTransport`) with
-  in-memory credentials only.
+  `RealHandoffTransport` (or a new `AxiHandoffTransport` that impls `HandoffTransport`).
 - **`src/main.rs`** — replace the hardcoded `Failed` closure with the real transport constructor.
 - **`src/lib.rs`** — re-export the new constructor.
 - No change to `src/factory/mod.rs` (the entrypoint already takes `transport`), `src/outbox/`, or
@@ -104,7 +114,8 @@ The board **consumes** `herdr-axi send`; it never re-implements machine/attach/t
 - **Integration — `tests/transport_reconcile.rs`** (or a new `tests/factory_transport.rs`): drive
   `process_with_factory` with the real transport wired to a stub herdr-axi on `PATH`; assert a
   `submitted` disposition finalizes the receipt `accepted`, a `not-submitted` leaves it
-  `handed-off`, and `reconfirm` re-dispatches idempotently (same `message_id`). Run:
+  `handed-off`, and `reconfirm` re-dispatches with a **fresh** correlation id (distinct
+  `message_id` across attempts). Run:
   `cargo test --locked --test factory_transport`.
 - **Smoke — `examples/factory_outbox_demo.rs`** (extend): swap the fake `Accepting`/`Stopped`
   transports for the real one pointed at a stub `herdr-axi`, proving the request actually leaves
