@@ -64,6 +64,53 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Wrap the card's badges (state, labels, assignee, milestone, factory) into
+/// whole chips at chip boundaries. Each returned string is a single rendered
+/// line of at most `max_width` cells, chips separated by a single space. A
+/// chip wider than `max_width` alone is the only elided case (trailing `…`).
+fn badge_lines(card: &Card, max_width: usize) -> Vec<String> {
+    let mut chips: Vec<String> = vec![state_badge(card)];
+    for label in &card.fields.labels {
+        chips.push(format!("[{label}]"));
+    }
+    if let Some(assignee) = &card.fields.assignee {
+        chips.push(format!("@{assignee}"));
+    }
+    if let Some(milestone) = &card.fields.milestone {
+        chips.push(format!("m:{milestone}"));
+    }
+    if card.factory_kind.is_factory_request() {
+        chips.push("⚙".to_owned());
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for chip in chips {
+        let chip_len = chip.chars().count();
+        if current.is_empty() {
+            current = if chip_len <= max_width {
+                chip
+            } else {
+                truncate(&chip, max_width)
+            };
+        } else if current.chars().count() + 1 + chip_len <= max_width {
+            current.push(' ');
+            current.push_str(&chip);
+        } else {
+            lines.push(current);
+            current = if chip_len <= max_width {
+                chip
+            } else {
+                truncate(&chip, max_width)
+            };
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
 /// Render the whole board.
 pub fn render(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
@@ -248,12 +295,15 @@ fn render_column(frame: &mut Frame<'_>, area: Rect, column: &BoardColumn, app: &
         } else {
             0
         };
-        let height = 4 + diff_rows;
+        // Card inner width is `inner.width - 2` (card border); badges are
+        // indented two cells, so the available chip width is `inner.width - 4`.
+        let badge_lines = badge_lines(card, inner.width.saturating_sub(4) as usize);
+        let height = 3 + badge_lines.len() as u16 + diff_rows;
         if y + height > inner.height {
             break;
         }
         let slot = Rect::new(inner.x, inner.y + y, inner.width, height);
-        render_card(frame, slot, entry, app, is_focused, diff_rows);
+        render_card(frame, slot, entry, app, is_focused, diff_rows, &badge_lines);
         y += height;
     }
 }
@@ -265,6 +315,7 @@ fn render_card(
     app: &App,
     is_focused: bool,
     diff_rows: u16,
+    badge_lines: &[String],
 ) {
     let card = entry.card();
     let accent = accent(card);
@@ -290,35 +341,20 @@ fn render_card(
         width.saturating_sub(2),
     );
 
-    let mut badges: Vec<String> = vec![state_badge(card)];
-    for label in &card.fields.labels {
-        badges.push(format!("[{label}]"));
-    }
-    if let Some(assignee) = &card.fields.assignee {
-        badges.push(format!("@{assignee}"));
-    }
-    if let Some(milestone) = &card.fields.milestone {
-        badges.push(format!("m:{milestone}"));
-    }
-    if card.factory_kind.is_factory_request() {
-        badges.push("⚙".to_owned());
-    }
-    let badge_text = truncate(&badges.join(" "), width.saturating_sub(2));
-
-    let mut lines: Vec<Line<'_>> = vec![
-        Line::from(vec![
-            Span::styled("▌", Style::new().fg(accent).add_modifier(Modifier::BOLD)),
-            Span::raw(format!(" {title}")),
-        ]),
-        Line::from(Span::styled(
-            format!("  {badge_text}"),
+    let mut lines: Vec<Line<'_>> = vec![Line::from(vec![
+        Span::styled("▌", Style::new().fg(accent).add_modifier(Modifier::BOLD)),
+        Span::raw(format!(" {title}")),
+    ])];
+    for badge_line in badge_lines {
+        lines.push(Line::from(Span::styled(
+            format!("  {badge_line}"),
             Style::new().fg(if card.fields.state == "closed" {
                 Color::DarkGray
             } else {
                 Color::Gray
             }),
-        )),
-    ];
+        )));
+    }
 
     if is_focused && card.conflict == Conflict::ApplyPending {
         lines.push(Line::from(Span::styled(
@@ -364,7 +400,7 @@ fn render_command_bar(frame: &mut Frame<'_>, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::render;
+    use super::{badge_lines, render};
     use crate::create::RepoIdentity;
     use crate::outbox::{CanonicalFields, Card, CardField, CardFieldDiff, Conflict, Store};
     use crate::ui::app::App;
@@ -465,6 +501,73 @@ mod tests {
         assert!(text.contains("[ All ]"), "toolbar tab");
     }
 
+    fn badge_card(number: u64, labels: Vec<String>) -> Card {
+        let mut c = card(number, "to-do", "open");
+        c.fields.labels = labels;
+        c.fields.assignee = None;
+        c.fields.milestone = None;
+        c.factory_kind = FactoryKind::Ordinary;
+        c
+    }
+
+    #[test]
+    fn badge_lines_wraps_whole_chips_never_split() {
+        // "• open" (6) + " [high-priority]" (16) = 22 > 20 → two lines; the
+        // label chip (15 cells) stays whole on line 2.
+        let c = badge_card(1, vec!["high-priority".to_owned()]);
+        let lines = badge_lines(&c, 20);
+        assert_eq!(
+            lines,
+            vec!["• open".to_owned(), "[high-priority]".to_owned()]
+        );
+        assert!(lines.join("\n").contains("high-priority"));
+        assert!(!lines.join(" ").contains('…'));
+    }
+
+    #[test]
+    fn badge_lines_single_line_when_short() {
+        // "• open [bug] @founder m:v1 ⚙" = 29 cells, fits within 60.
+        let c = card(1, "to-do", "open");
+        let lines = badge_lines(&c, 60);
+        assert_eq!(lines, vec!["• open [bug] @founder m:v1 ⚙".to_owned()]);
+    }
+
+    #[test]
+    fn badge_lines_elides_only_an_oversized_chip() {
+        // A 30-char label is a 32-cell chip, wider than the 20-cell line: the
+        // only elided case — trailing `…`, never exceeding `max_width`.
+        let c = badge_card(1, vec!["a".repeat(30)]);
+        let lines = badge_lines(&c, 20);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "• open");
+        assert!(lines[1].ends_with('…'));
+        assert!(lines[1].chars().count() <= 20);
+    }
+
+    #[test]
+    fn render_wraps_long_label_and_grows_card() {
+        let store = Store::open_in_memory().expect("open store");
+
+        let mut long = card(1, "to-do", "open");
+        long.fields.labels = vec!["priority".to_owned()];
+        long.fields.assignee = None;
+        long.fields.milestone = None;
+        long.factory_kind = FactoryKind::Ordinary;
+        store.insert_card(&long).expect("insert long-label card");
+
+        let app = App::new(store, RepoIdentity::new("thalixinc", "herdr-board"));
+        let backend = TestBackend::new(60, 30);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+
+        let text = buffer_text(terminal.backend());
+        assert!(text.contains("issue 1"), "title present");
+        assert!(text.contains("• open"), "state badge present");
+        assert!(
+            text.contains("[priority]"),
+            "full label chip present, not truncated mid-chip"
+        );
+        assert!(!text.contains('…'), "no mid-chip ellipsis");
     #[test]
     fn render_filter_bar_filters_columns() {
         let store = Store::open_in_memory().expect("open store");
