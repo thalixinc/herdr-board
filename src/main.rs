@@ -1,5 +1,6 @@
 use std::env;
 use std::io;
+use std::path::PathBuf;
 
 use crossterm::execute;
 use crossterm::terminal::{
@@ -13,26 +14,61 @@ use herdr_board::{
     RepoIdentity, Store,
 };
 
+/// The scoped repo and whether it was explicitly resolved from config/env
+/// (`true`) or fell back to the built-in dev constant (`false`).
+pub struct RepoScope {
+    pub repo: RepoIdentity,
+    pub explicit: bool,
+}
+
 /// Resolve the scoped repo from the environment, with a dev fallback.
 ///
-/// Order: `HERDR_BOARD_REPO` (`owner/repo`), then a `repo` field inside
+/// Order: `HERDR_BOARD_REPO` (`owner/repo`), then a `repo` file under
+/// `HERDR_PLUGIN_CONFIG_DIR`, then a `repo` field inside
 /// `HERDR_PLUGIN_CONTEXT_JSON`, then the dev constant.
-fn resolve_repo() -> RepoIdentity {
-    if let Ok(repo) = env::var("HERDR_BOARD_REPO") {
-        if let Some(parsed) = RepoIdentity::parse(&repo) {
-            return parsed;
+pub fn resolve_repo() -> RepoScope {
+    let env_repo = env::var("HERDR_BOARD_REPO").ok();
+    let config_repo = env::var_os("HERDR_PLUGIN_CONFIG_DIR").and_then(|config_dir| {
+        std::fs::read_to_string(PathBuf::from(config_dir).join("repo")).ok()
+    });
+    let context_repo = env::var("HERDR_PLUGIN_CONTEXT_JSON").ok().and_then(|json| {
+        serde_json::from_str::<serde_json::Value>(&json)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("repo")
+                    .and_then(|r| r.as_str())
+                    .map(str::to_owned)
+            })
+    });
+    resolve_repo_from(
+        env_repo.as_deref(),
+        config_repo.as_deref(),
+        context_repo.as_deref(),
+    )
+}
+
+/// The pure scoping decision, given the three candidate sources (in priority
+/// order). The first parseable `owner/repo` wins as an *explicit* scope;
+/// otherwise the built-in dev repo is used and reported as not explicitly
+/// scoped.
+fn resolve_repo_from(
+    env_repo: Option<&str>,
+    config_repo: Option<&str>,
+    context_repo: Option<&str>,
+) -> RepoScope {
+    for candidate in [env_repo, config_repo, context_repo] {
+        if let Some(parsed) = candidate.and_then(|c| RepoIdentity::parse(c.trim())) {
+            return RepoScope {
+                repo: parsed,
+                explicit: true,
+            };
         }
     }
-    if let Ok(json) = env::var("HERDR_PLUGIN_CONTEXT_JSON") {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) {
-            if let Some(repo) = value.get("repo").and_then(|r| r.as_str()) {
-                if let Some(parsed) = RepoIdentity::parse(repo) {
-                    return parsed;
-                }
-            }
-        }
+    RepoScope {
+        repo: RepoIdentity::new("thalixinc", "herdr-board"),
+        explicit: false,
     }
-    RepoIdentity::new("thalixinc", "herdr-board")
 }
 
 fn main() -> io::Result<()> {
@@ -51,7 +87,8 @@ fn main() -> io::Result<()> {
 }
 
 fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
-    let repo = resolve_repo();
+    let scope = resolve_repo();
+    let repo = scope.repo.clone();
     let store = Store::open(Store::default_path()).map_err(io::Error::other)?;
 
     let client = RealGitHubClient::new(Credentials::from_env());
@@ -70,5 +107,53 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
     };
 
     let mut app = App::new(store, repo.clone());
+    if !scope.explicit {
+        app.status = Some(format!(
+            "not scoped — set HERDR_BOARD_REPO or $HERDR_PLUGIN_CONFIG_DIR/repo (falling back to {})",
+            repo.canonical()
+        ));
+    }
     run_loop(terminal, &mut app, &deps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_repo_from;
+
+    #[test]
+    fn resolves_env_before_config_and_context() {
+        let scope = resolve_repo_from(
+            Some("Acme/Widgets"),
+            Some("config/owner-repo"),
+            Some("context/owner-repo"),
+        );
+        assert!(scope.explicit);
+        assert_eq!(scope.repo.canonical(), "acme/widgets");
+    }
+
+    #[test]
+    fn config_beats_context_when_env_absent() {
+        let scope = resolve_repo_from(None, Some("Acme/Widgets"), Some("ctx/other"));
+        assert!(scope.explicit);
+        assert_eq!(scope.repo.canonical(), "acme/widgets");
+    }
+
+    #[test]
+    fn context_used_when_higher_sources_absent() {
+        let scope = resolve_repo_from(None, None, Some("ThalixInc/herdr-board"));
+        assert!(scope.explicit);
+        assert_eq!(scope.repo.canonical(), "thalixinc/herdr-board");
+    }
+
+    #[test]
+    fn falls_back_unscoped_when_no_source_parses() {
+        let scope = resolve_repo_from(None, None, None);
+        assert!(!scope.explicit);
+        assert_eq!(scope.repo.canonical(), "thalixinc/herdr-board");
+
+        // Malformed values (no `/`, empty, or blank) do not count as a scope.
+        let bad = resolve_repo_from(Some("not-a-repo"), Some(""), Some("   "));
+        assert!(!bad.explicit);
+        assert_eq!(bad.repo.canonical(), "thalixinc/herdr-board");
+    }
 }

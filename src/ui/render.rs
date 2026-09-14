@@ -124,6 +124,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         constraints.push(Constraint::Length(1)); // filter prompt
     }
     constraints.push(Constraint::Min(1)); // columns
+    constraints.push(Constraint::Length(1)); // status
     constraints.push(Constraint::Length(1)); // command bar
 
     let vertical = Layout::default()
@@ -139,7 +140,8 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         index += 1;
     }
     render_columns(frame, vertical[index], app);
-    render_command_bar(frame, vertical[index + 1]);
+    render_status(frame, vertical[index + 1], app);
+    render_command_bar(frame, vertical[index + 2]);
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -237,6 +239,29 @@ fn render_filter_prompt(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Span::styled(buffer.clone(), Style::new().fg(Color::White)),
         Span::styled("_", Style::new().fg(Color::Cyan)),
     ]);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+/// The status line: the last action's outcome, or a quiet scoped-repo hint.
+///
+/// A status always renders (never a blank row): a set status shows the action
+/// result or why a key could not act; otherwise the line shows the scoped repo
+/// and the focused card so a dead-looking key is never silent.
+fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let text = match &app.status {
+        Some(status) => status.clone(),
+        None => match app.focused() {
+            Some(card) => format!(
+                "{}/{} · focused #{}",
+                app.repo.owner, app.repo.repo, card.identity.number
+            ),
+            None => format!("{}/{} · no card focused", app.repo.owner, app.repo.repo),
+        },
+    };
+    let line = Line::from(Span::styled(
+        truncate(&text, area.width as usize),
+        Style::new().fg(Color::Yellow),
+    ));
     frame.render_widget(Paragraph::new(line), area);
 }
 
@@ -499,6 +524,26 @@ mod tests {
         assert!(text.contains("TO-DO · 0"), "empty column still renders");
         assert!(text.contains("DONE · 0"), "empty column still renders");
         assert!(text.contains("[ All ]"), "toolbar tab");
+        // An empty board with no focused card must say why a data key can't act.
+        assert!(
+            text.contains("no card focused"),
+            "empty board surfaces no-card"
+        );
+    }
+
+    #[test]
+    fn render_status_line_shows_action_outcome() {
+        let store = Store::open_in_memory().expect("open store");
+        let mut app = App::new(store, RepoIdentity::new("thalixinc", "herdr-board"));
+        app.status = Some("not scoped — set HERDR_BOARD_REPO".to_owned());
+        let backend = TestBackend::new(140, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+        let text = buffer_text(terminal.backend());
+        assert!(
+            text.contains("not scoped — set HERDR_BOARD_REPO"),
+            "status line surfaces the failure reason, never silently drops it"
+        );
     }
 
     fn badge_card(number: u64, labels: Vec<String>) -> Card {
