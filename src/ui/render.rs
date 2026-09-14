@@ -568,6 +568,8 @@ mod tests {
             "full label chip present, not truncated mid-chip"
         );
         assert!(!text.contains('…'), "no mid-chip ellipsis");
+    }
+
     #[test]
     fn render_filter_bar_filters_columns() {
         let store = Store::open_in_memory().expect("open store");
