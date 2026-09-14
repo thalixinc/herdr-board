@@ -40,7 +40,21 @@ pub enum Action {
     SelectNext,
     /// `k` — select the previous card.
     SelectPrev,
-    /// `/` — clear the filters.
+    /// `/` — open the filter input bar (assignee dimension first).
+    FilterOpen,
+    /// A character typed into the filter input buffer.
+    FilterChar(char),
+    /// `Enter` — apply the active dimension's buffer as a filter.
+    FilterApply,
+    /// `Backspace` — remove the last character from the filter buffer.
+    FilterBackspace,
+    /// `Tab` / `←` / `→` — cycle to the next filter dimension.
+    FilterNext,
+    /// `Delete` — clear the active dimension's filter.
+    FilterClearDimension,
+    /// `Esc` (bar open) — close the filter bar without applying.
+    FilterClose,
+    /// `x` (bar open) — clear every filter.
     ClearFilters,
     /// `q` / `esc` / `ctrl+c` — quit.
     Quit,
@@ -51,7 +65,38 @@ pub struct KeyMap;
 
 impl KeyMap {
     /// Resolve a key press (code + modifiers) to an action, if bound.
-    pub fn resolve(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
+    ///
+    /// `filter_open` selects the binding set: while the filter bar is open,
+    /// ordinary characters type into the buffer and navigation keys cycle the
+    /// dimension, so the normal board bindings are suspended.
+    pub fn resolve(
+        &self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        filter_open: bool,
+    ) -> Option<Action> {
+        if filter_open {
+            return match (modifiers, code) {
+                (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::FilterClose),
+                (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FilterApply),
+                (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::FilterBackspace),
+                (KeyModifiers::NONE, KeyCode::Delete) => Some(Action::FilterClearDimension),
+                (KeyModifiers::NONE, KeyCode::Tab) => Some(Action::FilterNext),
+                (KeyModifiers::NONE, KeyCode::Left) => Some(Action::FilterNext),
+                (KeyModifiers::NONE, KeyCode::Right) => Some(Action::FilterNext),
+                (KeyModifiers::NONE, KeyCode::Char('x')) => Some(Action::ClearFilters),
+                (KeyModifiers::CONTROL, KeyCode::Char('c')) => Some(Action::Quit),
+                // Free-text entry accepts the typed character regardless of
+                // SHIFT (uppercase letters, symbols) so no keystroke is
+                // dropped silently; only Ctrl/Alt chords are withheld.
+                (mods, KeyCode::Char(c))
+                    if !mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    Some(Action::FilterChar(c))
+                }
+                _ => None,
+            };
+        }
         match (modifiers, code) {
             (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::Sync),
             (KeyModifiers::NONE, KeyCode::Char('a')) => Some(Action::ApplyPull),
@@ -66,7 +111,7 @@ impl KeyMap {
             (KeyModifiers::NONE, KeyCode::Char('l')) => Some(Action::MoveRight),
             (KeyModifiers::NONE, KeyCode::Char('j')) => Some(Action::SelectNext),
             (KeyModifiers::NONE, KeyCode::Char('k')) => Some(Action::SelectPrev),
-            (KeyModifiers::NONE, KeyCode::Char('/')) => Some(Action::ClearFilters),
+            (KeyModifiers::NONE, KeyCode::Char('/')) => Some(Action::FilterOpen),
             (KeyModifiers::NONE, KeyCode::Char('q')) => Some(Action::Quit),
             (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Quit),
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => Some(Action::Quit),
@@ -253,8 +298,16 @@ where
         }
         Action::SelectNext => app.select_next(),
         Action::SelectPrev => app.select_prev(),
+        Action::FilterOpen => app.open_filter(),
+        Action::FilterChar(c) => app.push_filter_char(c),
+        Action::FilterApply => app.apply_filter(),
+        Action::FilterBackspace => app.pop_filter_char(),
+        Action::FilterNext => app.cycle_filter_dimension(),
+        Action::FilterClearDimension => app.clear_filter_dimension(),
+        Action::FilterClose => app.close_filter(),
         Action::ClearFilters => {
             app.set_filter(Filters::default());
+            app.close_filter();
             app.status = Some("filters cleared".to_owned());
         }
         Action::Quit => {}
@@ -293,4 +346,55 @@ fn shift_column(current: &str, delta: i32) -> String {
     };
     let next = (index as i32 + delta).clamp(0, BOARD_COLUMNS.len() as i32 - 1) as usize;
     BOARD_COLUMNS[next].to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    use super::{Action, KeyMap};
+
+    #[test]
+    fn filter_accepts_shifted_uppercase_char() {
+        let map = KeyMap;
+        // `Shift+E` arrives as `Char('E')` with the SHIFT modifier set; it must
+        // type the uppercase letter rather than being dropped.
+        assert_eq!(
+            map.resolve(KeyCode::Char('E'), KeyModifiers::SHIFT, true),
+            Some(Action::FilterChar('E'))
+        );
+    }
+
+    #[test]
+    fn filter_accepts_shifted_symbol_char() {
+        let map = KeyMap;
+        // `Shift+1` arrives as `Char('!')` with the SHIFT modifier set.
+        assert_eq!(
+            map.resolve(KeyCode::Char('!'), KeyModifiers::SHIFT, true),
+            Some(Action::FilterChar('!'))
+        );
+    }
+
+    #[test]
+    fn filter_control_and_plain_bindings_unchanged() {
+        let map = KeyMap;
+        // Ctrl+C still quits; a plain `x` still clears all filters; Ctrl/Alt
+        // chords are withheld rather than typed.
+        assert_eq!(
+            map.resolve(KeyCode::Char('c'), KeyModifiers::CONTROL, true),
+            Some(Action::Quit)
+        );
+        assert_eq!(
+            map.resolve(KeyCode::Char('x'), KeyModifiers::NONE, true),
+            Some(Action::ClearFilters)
+        );
+        assert_eq!(
+            map.resolve(KeyCode::Char('e'), KeyModifiers::CONTROL, true),
+            None
+        );
+        assert_eq!(
+            map.resolve(KeyCode::Char('e'), KeyModifiers::ALT, true),
+            None
+        );
+    }
 }
