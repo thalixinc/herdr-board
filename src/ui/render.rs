@@ -10,7 +10,7 @@ use ratatui::Frame;
 
 use crate::outbox::{Card, Conflict};
 
-use super::app::App;
+use super::app::{App, FilterInput};
 use super::model::{BoardColumn, Entry};
 
 /// Left-accent + badge colors, keyed to card state (open/closed/conflict) and
@@ -114,20 +114,32 @@ fn badge_lines(card: &Card, max_width: usize) -> Vec<String> {
 /// Render the whole board.
 pub fn render(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
+    let bar_active = app.filter_input.is_active();
+
+    let mut constraints = vec![
+        Constraint::Length(1), // header
+        Constraint::Length(1), // toolbar
+    ];
+    if bar_active {
+        constraints.push(Constraint::Length(1)); // filter prompt
+    }
+    constraints.push(Constraint::Min(1)); // columns
+    constraints.push(Constraint::Length(1)); // command bar
+
     let vertical = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // header
-            Constraint::Length(1), // toolbar
-            Constraint::Min(1),    // columns
-            Constraint::Length(1), // command bar
-        ])
+        .constraints(constraints)
         .split(area);
 
     render_header(frame, vertical[0], app);
     render_toolbar(frame, vertical[1], app);
-    render_columns(frame, vertical[2], app);
-    render_command_bar(frame, vertical[3]);
+    let mut index = 2;
+    if bar_active {
+        render_filter_prompt(frame, vertical[index], app);
+        index += 1;
+    }
+    render_columns(frame, vertical[index], app);
+    render_command_bar(frame, vertical[index + 1]);
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -186,9 +198,46 @@ fn render_toolbar(frame: &mut Frame<'_>, area: Rect, app: &App) {
             format!("[“{title}”]"),
             Style::new().fg(Color::Magenta),
         ));
+        spans.push(Span::raw(" "));
+    }
+    if let Some(epic) = app.filters.epic {
+        spans.push(Span::styled(
+            format!("[epic:#{epic}]"),
+            Style::new().fg(Color::Magenta),
+        ));
+        spans.push(Span::raw(" "));
+    }
+    if let Some(milestone) = &app.filters.milestone {
+        spans.push(Span::styled(
+            format!("[m:{milestone}]"),
+            Style::new().fg(Color::Magenta),
+        ));
+        spans.push(Span::raw(" "));
+    }
+    if let Some(repository) = &app.filters.repository {
+        spans.push(Span::styled(
+            format!("[repo:{repository}]"),
+            Style::new().fg(Color::Magenta),
+        ));
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// The filter-input prompt line: `assignee > founder_` style, buffer echoed.
+fn render_filter_prompt(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let FilterInput::Active { dimension, buffer } = &app.filter_input else {
+        return;
+    };
+    let line = Line::from(vec![
+        Span::styled(
+            format!("{} > ", dimension.name()),
+            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(buffer.clone(), Style::new().fg(Color::White)),
+        Span::styled("_", Style::new().fg(Color::Cyan)),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn render_columns(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -519,5 +568,70 @@ mod tests {
             "full label chip present, not truncated mid-chip"
         );
         assert!(!text.contains('…'), "no mid-chip ellipsis");
+    #[test]
+    fn render_filter_bar_filters_columns() {
+        let store = Store::open_in_memory().expect("open store");
+
+        store
+            .insert_card(&card(1, "to-do", "open"))
+            .expect("insert founder card");
+
+        let mut other = card(2, "to-do", "open");
+        other.fields.assignee = Some("someone-else".to_owned());
+        other.fields.title = "someone else's issue".to_owned();
+        store.insert_card(&other).expect("insert other card");
+
+        let mut app = App::new(store, RepoIdentity::new("thalixinc", "herdr-board"));
+        app.open_filter();
+        for c in "founder".chars() {
+            app.push_filter_char(c);
+        }
+        app.apply_filter();
+
+        let backend = TestBackend::new(140, 30);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+        let text = buffer_text(terminal.backend());
+
+        assert!(
+            text.contains("assignee > founder"),
+            "prompt echoes the active dimension and buffer"
+        );
+        assert!(text.contains("issue 1"), "matching card renders");
+        assert!(
+            !text.contains("someone else's issue"),
+            "non-matching card is filtered out"
+        );
+        assert!(text.contains("[@founder]"), "assignee chip renders");
+    }
+
+    #[test]
+    fn render_filter_chips_all_dimensions() {
+        let store = Store::open_in_memory().expect("open store");
+        store
+            .insert_card(&card(1, "to-do", "open"))
+            .expect("insert card");
+
+        let mut app = App::new(store, RepoIdentity::new("thalixinc", "herdr-board"));
+        app.filters.assignee = Some("founder".to_owned());
+        app.filters.labels = vec!["bug".to_owned()];
+        app.filters.title = Some("sync".to_owned());
+        app.filters.epic = Some(10);
+        app.filters.milestone = Some("v1".to_owned());
+        app.filters.repository = Some("thalixinc/herdr-board".to_owned());
+
+        let backend = TestBackend::new(160, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+        let text = buffer_text(terminal.backend());
+
+        assert!(text.contains("[epic:#10]"), "epic chip renders");
+        assert!(text.contains("[m:v1]"), "milestone chip renders");
+        assert!(
+            text.contains("[repo:thalixinc/herdr-board]"),
+            "repository chip renders"
+        );
+        assert!(text.contains("[label:bug]"), "label chip renders");
+        assert!(text.contains("[@founder]"), "assignee chip renders");
     }
 }

@@ -7,7 +7,7 @@ mod model;
 mod render;
 
 pub use actions::{dispatch, Action, Deps, KeyMap, UiError};
-pub use app::App;
+pub use app::{App, FilterDimension, FilterInput};
 pub use event::run_loop;
 pub use model::{
     is_epic, parent_of, BoardColumn, BoardModel, Entry, Filters, ParentRef, BOARD_COLUMNS,

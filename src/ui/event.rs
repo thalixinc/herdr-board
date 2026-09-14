@@ -31,7 +31,9 @@ where
             if key.kind != KeyEventKind::Press {
                 continue;
             }
-            let Some(action) = keymap.resolve(key.code, key.modifiers) else {
+            let Some(action) =
+                keymap.resolve(key.code, key.modifiers, app.filter_input.is_active())
+            else {
                 continue;
             };
             if matches!(action, Action::Quit) {
